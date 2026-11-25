@@ -1,10 +1,10 @@
 #!/bin/bash
 # Збирає universal SvitloBar.app (arm64 + x86_64), пакує dist/SvitloBar.zip і встановлює в ~/Applications.
-# Версія береться з файлу VERSION.
+# Версія: змінна VERSION (так робить CI) або файл VERSION. SKIP_INSTALL=1 — лише зібрати.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION="$(tr -d '[:space:]' < VERSION)"
+VERSION="${VERSION:-$(tr -d '[:space:]' < VERSION)}"
 BUILD_DIR="build"
 APP="$BUILD_DIR/SvitloBar.app"
 INSTALL_DIR="$HOME/Applications/SvitloBar.app"
@@ -23,6 +23,11 @@ cp Info.plist "$APP/Contents/Info.plist"
 codesign --force --sign - "$APP"
 
 ditto -c -k --keepParent "$APP" dist/SvitloBar.zip
+
+if [ "${SKIP_INSTALL:-0}" = "1" ]; then
+    echo "Зібрано SvitloBar $VERSION → dist/SvitloBar.zip"
+    exit 0
+fi
 
 # Якщо додаток запущений — зупинити перед заміною
 pkill -x SvitloBar 2>/dev/null || true

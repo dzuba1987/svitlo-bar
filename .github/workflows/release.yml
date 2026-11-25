@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'README.md'
+      - '.gitignore'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Next version
+        id: version
+        run: |
+          base="$(tr -d '[:space:]' < VERSION)"
+          latest="$(git tag --list 'v*' --sort=-v:refname | head -1 | sed 's/^v//')"
+          if [ -z "$latest" ]; then
+            next="$base"
+          else
+            # Наступна = остання + 1 в останньому числі; ручне підняття VERSION (напр. 2.0) має пріоритет
+            bumped="${latest%.*}.$(( ${latest##*.} + 1 ))"
+            next="$(printf '%s\n%s\n' "$bumped" "$base" | sort -V | tail -1)"
+            if [ "$next" = "$latest" ]; then next="$bumped"; fi
+          fi
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "Next version: $next"
+
+      - name: Build
+        run: VERSION="${{ steps.version.outputs.version }}" SKIP_INSTALL=1 ./build.sh
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git log -1 --pretty=%B > notes.txt
+          gh release create "v$VERSION" dist/SvitloBar.zip \
+            --target "$GITHUB_SHA" \
+            --title "SvitloBar $VERSION" \
+            --notes-file notes.txt
