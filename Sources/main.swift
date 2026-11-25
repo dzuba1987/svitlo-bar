@@ -843,6 +843,8 @@ final class SettingsWindowController: NSWindowController {
     private var cityRow: NSStackView!
     private var addressRows: [NSStackView] = []
     private let hint = NSTextField(wrappingLabelWithString: "")
+    private let menuBarHint = NSTextField(wrappingLabelWithString:
+        "SvitloBar працює в рядку меню вгорі праворуч (значок ⚡︎ з часом). Якщо його не видно, він може ховатися під виїмкою екрана — приберіть кілька значків або перетягніть їх із ⌘. Повторне відкриття SvitloBar з Finder чи Launchpad знову покаже це вікно.")
     private let lookupButton = NSButton(title: "Де дізнатися свою чергу?", target: nil, action: nil)
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let saveButton = NSButton(title: "Зберегти", target: nil, action: nil)
@@ -854,7 +856,7 @@ final class SettingsWindowController: NSWindowController {
     var onBlinkChange: (() -> Void)?
 
     convenience init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 380),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 440),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "SvitloBar — налаштування"
         self.init(window: window)
@@ -903,12 +905,15 @@ final class SettingsWindowController: NSWindowController {
 
         statusLabel.font = .systemFont(ofSize: 11)
         statusLabel.preferredMaxLayoutWidth = 410
+        menuBarHint.font = .systemFont(ofSize: 11)
+        menuBarHint.textColor = .secondaryLabelColor
+        menuBarHint.preferredMaxLayoutWidth = 410
         blinkCheckbox.target = self
         blinkCheckbox.action = #selector(blinkToggled)
         blinkCheckbox.state = Store.blinkEnabled ? .on : .off
 
         let stack = NSStackView(views: [row("Область", regionPopup), row("Черга", queuePopup)]
-                                + addressRows + [hint, lookupButton, buttonRow, statusLabel, blinkCheckbox])
+                                + addressRows + [hint, lookupButton, buttonRow, statusLabel, blinkCheckbox, menuBarHint])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -982,6 +987,7 @@ final class SettingsWindowController: NSWindowController {
             hint.stringValue = "Для цього регіону черга обирається вручну — її вказано на сайті оператора або в особистому кабінеті."
         }
         saveButton.title = byAddress ? "Знайти чергу й зберегти" : "Зберегти"
+        cityField.placeholderString = region.id == "vinnytsia" ? "Вінниця" : "Дніпро"
     }
 
     @objc private func openLookupPage() {
@@ -1345,6 +1351,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var updateTimer: Timer?
     private var availableUpdate: Updater.Release?
     private var isUpdating = false
+
+    // Повторне відкриття з Finder/Launchpad: у застосунку рядка меню немає вікна, тож показуємо налаштування
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openSettings()
+        return false
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -1912,6 +1924,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsController?.window?.center()
         settingsController?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
+        // Після дозволу Gatekeeper вікно інакше може лишитися під «Системними параметрами»
+        settingsController?.window?.orderFrontRegardless()
+        settingsController?.window?.makeKey()
     }
 
     private func save(_ submission: SettingsWindowController.Submission) {
