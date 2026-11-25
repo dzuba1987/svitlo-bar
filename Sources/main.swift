@@ -57,6 +57,92 @@ struct AppError: Error, LocalizedError {
     var errorDescription: String? { message }
 }
 
+// MARK: - Регіони (оператори систем розподілу)
+
+enum AddressLookup {
+    case voe                                   // сайт Вінницяобленерго (Cloudflare)
+    case yasno(regionId: Int, dsoId: Int, hasCities: Bool)
+    case none                                  // черга лише вручну
+}
+
+struct Region {
+    let id: String
+    let name: String
+    let operatorName: String
+    let svitloPulseOperator: String?  // id оператора в SvitloPulse
+    let svitloPulseOblast: String?    // slug області в SvitloPulse (список черг)
+    let gpvSlug: String?              // slug регіону в GPV-UA
+    let lookup: AddressLookup
+
+    static let all: [Region] = [
+        Region(id: "vinnytsia", name: "Вінницька область", operatorName: "Вінницяобленерго",
+               svitloPulseOperator: "vinnytsiaoblenergo", svitloPulseOblast: "vinnytsia-oblast", gpvSlug: nil, lookup: .voe),
+        Region(id: "volyn", name: "Волинська область", operatorName: "Волиньобленерго",
+               svitloPulseOperator: "volynoblenergo", svitloPulseOblast: "volyn-oblast", gpvSlug: "volyn", lookup: .none),
+        Region(id: "dnipro", name: "Дніпропетровська область (ДТЕК)", operatorName: "ДТЕК Дніпровські електромережі",
+               svitloPulseOperator: "dtek-dnem", svitloPulseOblast: "dnipropetrovsk-oblast", gpvSlug: "dnipro",
+               lookup: .yasno(regionId: 3, dsoId: 301, hasCities: true)),
+        Region(id: "dnipro-cek", name: "Дніпропетровська область (ЦЕК)", operatorName: "ЦЕК",
+               svitloPulseOperator: "cek-dnipro", svitloPulseOblast: "dnipropetrovsk-oblast", gpvSlug: "dnipro-cek",
+               lookup: .yasno(regionId: 3, dsoId: 303, hasCities: true)),
+        Region(id: "zhytomyr", name: "Житомирська область", operatorName: "Житомиробленерго",
+               svitloPulseOperator: "zhytomyroblenergo", svitloPulseOblast: "zhytomyr-oblast", gpvSlug: "zhytomyr", lookup: .none),
+        Region(id: "zakarpattia", name: "Закарпатська область", operatorName: "Закарпаттяобленерго",
+               svitloPulseOperator: "zakarpattiaoblenergo", svitloPulseOblast: "zakarpattia-oblast", gpvSlug: "zakarpattia", lookup: .none),
+        Region(id: "zaporizhzhia", name: "Запорізька область", operatorName: "Запоріжжяобленерго",
+               svitloPulseOperator: "zaporizhzhiaoblenergo", svitloPulseOblast: "zaporizhzhia-oblast", gpvSlug: "zaporizhzhia", lookup: .none),
+        Region(id: "ivano-frankivsk", name: "Івано-Франківська область", operatorName: "Прикарпаттяобленерго",
+               svitloPulseOperator: "prykarpattiaoblenergo", svitloPulseOblast: "ivano-frankivsk-oblast", gpvSlug: "ivano-frankivsk", lookup: .none),
+        Region(id: "kyiv", name: "Київ", operatorName: "ДТЕК Київські електромережі",
+               svitloPulseOperator: "dtek-kem", svitloPulseOblast: "kyiv-city", gpvSlug: "kyiv",
+               lookup: .yasno(regionId: 25, dsoId: 902, hasCities: false)),
+        Region(id: "kyiv-region", name: "Київська область", operatorName: "ДТЕК Київські регіональні електромережі",
+               svitloPulseOperator: "dtek-krem", svitloPulseOblast: "kyiv-oblast", gpvSlug: "kyiv-region", lookup: .none),
+        Region(id: "kirovohrad", name: "Кіровоградська область", operatorName: "Кіровоградобленерго",
+               svitloPulseOperator: "kirovohradoblenergo", svitloPulseOblast: "kirovohrad-oblast", gpvSlug: "kirovohrad", lookup: .none),
+        Region(id: "lviv", name: "Львівська область", operatorName: "Львівобленерго",
+               svitloPulseOperator: "lvivoblenergo", svitloPulseOblast: "lviv-oblast", gpvSlug: "lviv", lookup: .none),
+        Region(id: "mykolaiv", name: "Миколаївська область", operatorName: "Миколаївобленерго",
+               svitloPulseOperator: "mykolaivoblenergo", svitloPulseOblast: "mykolaiv-oblast", gpvSlug: "mykolaiv", lookup: .none),
+        Region(id: "yuzhnoukrainsk", name: "Южноукраїнськ", operatorName: "ДПЕМ «Атомсервіс»",
+               svitloPulseOperator: nil, svitloPulseOblast: nil, gpvSlug: "yuzhnoukrainsk", lookup: .none),
+        Region(id: "odesa", name: "Одеська область", operatorName: "ДТЕК Одеські електромережі",
+               svitloPulseOperator: "dtek-oem", svitloPulseOblast: "odesa-oblast", gpvSlug: "odesa", lookup: .none),
+        Region(id: "poltava", name: "Полтавська область", operatorName: "Полтаваобленерго",
+               svitloPulseOperator: "poltavaoblenergo", svitloPulseOblast: "poltava-oblast", gpvSlug: "poltava", lookup: .none),
+        Region(id: "rivne", name: "Рівненська область", operatorName: "Рівнеобленерго",
+               svitloPulseOperator: "rivneoblenergo", svitloPulseOblast: "rivne-oblast", gpvSlug: "rivne", lookup: .none),
+        Region(id: "sumy", name: "Сумська область", operatorName: "Сумиобленерго",
+               svitloPulseOperator: "sumyoblenergo", svitloPulseOblast: "sumy-oblast", gpvSlug: "sumy", lookup: .none),
+        Region(id: "ternopil", name: "Тернопільська область", operatorName: "Тернопільобленерго",
+               svitloPulseOperator: "ternopiloblenergo", svitloPulseOblast: "ternopil-oblast", gpvSlug: "ternopil", lookup: .none),
+        Region(id: "kharkiv", name: "Харківська область", operatorName: "Харківобленерго",
+               svitloPulseOperator: "kharkivoblenergo", svitloPulseOblast: "kharkiv-oblast", gpvSlug: "kharkiv", lookup: .none),
+        Region(id: "khmelnytskyi", name: "Хмельницька область", operatorName: "Хмельницькобленерго",
+               svitloPulseOperator: "khmelnytskoblenergo", svitloPulseOblast: "khmelnytskyi-oblast", gpvSlug: "khmelnytskyi", lookup: .none),
+        Region(id: "cherkasy", name: "Черкаська область", operatorName: "Черкасиобленерго",
+               svitloPulseOperator: "cherkasyoblenergo", svitloPulseOblast: "cherkasy-oblast", gpvSlug: "cherkasy", lookup: .none),
+        Region(id: "chernivtsi", name: "Чернівецька область", operatorName: "Чернівціобленерго",
+               svitloPulseOperator: "chernivtsioblenergo", svitloPulseOblast: "chernivtsi-oblast", gpvSlug: "chernivtsi", lookup: .none),
+        Region(id: "chernihiv", name: "Чернігівська область", operatorName: "Чернігівобленерго",
+               svitloPulseOperator: "chernihivoblenergo", svitloPulseOblast: "chernihiv-oblast", gpvSlug: "chernihiv", lookup: .none)
+    ]
+
+    static func find(_ id: String?) -> Region {
+        all.first { $0.id == id } ?? all[0]
+    }
+
+    var hasAddressLookup: Bool {
+        if case .none = lookup { return false }
+        return true
+    }
+
+    // Запасний список, якщо обидва агрегатори не віддали черги
+    var defaultQueues: [String] {
+        id == "kyiv" ? (1...60).map { "\($0).1" } : (1...6).flatMap { ["\($0).1", "\($0).2"] }
+    }
+}
+
 // MARK: - Налаштування (UserDefaults)
 
 enum Store {
@@ -79,7 +165,17 @@ enum Store {
         set { UserDefaults.standard.set(newValue, forKey: "queue") }
     }
 
-    static let vinnytsiaQueues = ["1.1", "1.2", "2.1", "2.2", "3.1", "3.2", "4.1", "4.2", "5.1", "5.2", "6.1", "6.2"]
+    // До мультирегіональності всі були у Вінниці — це значення за замовчуванням
+    static var region: Region {
+        get { Region.find(UserDefaults.standard.string(forKey: "regionId")) }
+        set { UserDefaults.standard.set(newValue.id, forKey: "regionId") }
+    }
+
+    // Підпис адреси для меню (VOE або YASNO); nil — черга обрана вручну
+    static var addressLabel: String? {
+        get { UserDefaults.standard.string(forKey: "addressLabel") ?? (manualQueue ? nil : load()?.shortLabel) }
+        set { UserDefaults.standard.set(newValue, forKey: "addressLabel") }
+    }
 
     // Черга обрана вручну (адресу на сайті VOE не шукаємо)
     static var manualQueue: Bool {
@@ -384,35 +480,85 @@ final class VOEClient: NSObject, WKNavigationDelegate {
     }
 }
 
+// MARK: - Спільне для агрегаторів
+
+enum Net {
+    static func json(_ url: URL) async throws -> Any {
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        request.setValue("SvitloBar/\(Updater.currentVersion)", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else { throw AppError("\(url.host ?? "сервер"): HTTP \(status)") }
+        return try JSONSerialization.jsonObject(with: data)
+    }
+
+    static func url(_ base: String, _ path: String, _ query: [String: String] = [:]) -> URL? {
+        var components = URLComponents(string: base + path)
+        if !query.isEmpty {
+            components?.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        return components?.url
+    }
+}
+
+enum DayBuilder {
+    static let kyiv = TimeZone(identifier: "Europe/Kyiv") ?? .current
+
+    static var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = kyiv
+        return calendar
+    }
+
+    static func dayStart(offset: Int) -> Date {
+        calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: Date())) ?? Date()
+    }
+
+    // Інтервали в абсолютному часі → 48 півгодинних слотів доби
+    static func day(start: Date, intervals: [(Date, Date, Int)]) -> DaySchedule {
+        var slots = [Int](repeating: 0, count: slotsPerDay)
+        for (from, to, level) in intervals {
+            for slot in 0..<slotsPerDay {
+                let slotStart = start.addingTimeInterval(Double(slot * slotMinutes * 60))
+                let slotEnd = slotStart.addingTimeInterval(Double(slotMinutes * 60))
+                if slotStart < to && slotEnd > from { slots[slot] = max(slots[slot], level) }
+            }
+        }
+        let dateFormatter = DateFormatter()
+        dateFormatter.timeZone = kyiv
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let labelFormatter = DateFormatter()
+        labelFormatter.timeZone = kyiv
+        labelFormatter.locale = Locale(identifier: "uk_UA")
+        labelFormatter.dateFormat = "EEEEEE dd.MM"
+        let label = labelFormatter.string(from: start)
+        return DaySchedule(date: dateFormatter.string(from: start),
+                           label: label.prefix(1).uppercased() + label.dropFirst(), slots: slots)
+    }
+
+    static func level(_ kind: String?) -> Int {
+        kind == "off" ? 4 : 2
+    }
+}
+
 // MARK: - Основне джерело: SvitloPulse (відкритий API агрегатора, без Cloudflare)
 // https://svitlopulse.andrewboyko.name/api/ — графік черги на сьогодні й завтра, оновлення ~щохвилини.
 
 enum SvitloPulseClient {
     static let base = "https://svitlopulse.andrewboyko.name/api/v1"
-    static let operatorId = "vinnytsiaoblenergo"
 
-    static func fetch(queue: String, completion: @escaping (Result<Schedule, Error>) -> Void) {
-        guard let url = URL(string: "\(base)/groups/\(operatorId)/\(queue)") else {
-            return completion(.failure(AppError("SvitloPulse: некоректна черга \(queue)")))
-        }
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
-        request.setValue("SvitloBar/\(Updater.currentVersion)", forHTTPHeaderField: "User-Agent")
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error { return completion(.failure(error)) }
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            guard status == 200 else { return completion(.failure(AppError("SvitloPulse: HTTP \(status)"))) }
-            do {
-                completion(.success(try parse(data ?? Data(), queue: queue)))
-            } catch {
-                completion(.failure(error))
-            }
-        }.resume()
+    static func queues(oblast: String, operatorId: String) async throws -> [String] {
+        guard let url = Net.url(base, "/oblasts/\(oblast)"),
+              let obj = try await Net.json(url) as? [String: Any],
+              let groups = obj["groups"] as? [[String: Any]] else { return [] }
+        return groups.filter { $0["operator_id"] as? String == operatorId }.compactMap { $0["group"] as? String }
     }
 
-    static func parse(_ data: Data, queue: String) throws -> Schedule {
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+    static func schedule(operatorId: String, queue: String) async throws -> Schedule {
+        guard let url = Net.url(base, "/groups/\(operatorId)/\(queue)"),
+              let obj = try await Net.json(url) as? [String: Any],
               let group = obj["group"] as? [String: Any] else {
-            throw AppError("SvitloPulse: невалідний JSON")
+            throw AppError("SvitloPulse: невалідна відповідь")
         }
         let op = obj["operator"] as? [String: Any]
         if (op?["stale"] as? Bool) == true {
@@ -426,46 +572,173 @@ enum SvitloPulseClient {
             return iso.date(from: text) ?? isoFrac.date(from: text)
         }
 
-        let kyiv = TimeZone(identifier: "Europe/Kyiv") ?? .current
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = kyiv
-        let dateFormatter = DateFormatter()
-        dateFormatter.timeZone = kyiv
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-        let labelFormatter = DateFormatter()
-        labelFormatter.timeZone = kyiv
-        labelFormatter.locale = Locale(identifier: "uk_UA")
-        labelFormatter.dateFormat = "EEEEEE dd.MM"
-
-        let now = Date()
         var days: [DaySchedule] = []
         for (offset, key) in ["today", "tomorrow"].enumerated() {
             let intervals = group[key] as? [[String: Any]] ?? []
-            // Порожній «завтра» = ще не опубліковано (як і в дзеркалі)
+            // Порожній «завтра» = ще не опубліковано
             if offset > 0 && intervals.isEmpty { continue }
-            guard let dayStart = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: now)) else { continue }
-            var slots = [Int](repeating: 0, count: slotsPerDay)
-            for interval in intervals {
-                guard let start = date(interval["start"]), let end = date(interval["end"]) else { continue }
-                let level = (interval["kind"] as? String) == "off" ? 4 : 2
-                for slot in 0..<slotsPerDay {
-                    let slotStart = dayStart.addingTimeInterval(Double(slot * slotMinutes * 60))
-                    let slotEnd = slotStart.addingTimeInterval(Double(slotMinutes * 60))
-                    if slotStart < end && slotEnd > start { slots[slot] = max(slots[slot], level) }
-                }
+            let parsed = intervals.compactMap { item -> (Date, Date, Int)? in
+                guard let from = date(item["start"]), let to = date(item["end"]) else { return nil }
+                return (from, to, DayBuilder.level(item["kind"] as? String))
             }
-            let label = labelFormatter.string(from: dayStart)
-            days.append(DaySchedule(date: dateFormatter.string(from: dayStart),
-                                    label: label.prefix(1).uppercased() + label.dropFirst(), slots: slots))
+            days.append(DayBuilder.day(start: DayBuilder.dayStart(offset: offset), intervals: parsed))
         }
 
         var messages: [String] = []
         if (group["class"] as? String) == "emergency" || ((group["plan_status"] as? String).map { $0 != "applies" } ?? false) {
             messages.append("Аварійні відключення — графік може не діяти")
         }
-        var schedule = Schedule(queue: queue, days: days, messages: messages, fetched: date(op?["updated_at"]) ?? now)
+        var schedule = Schedule(queue: queue, days: days, messages: messages, fetched: date(op?["updated_at"]) ?? Date())
         schedule.sourceName = "SvitloPulse"
         return schedule
+    }
+}
+
+// MARK: - Друге джерело: GPV-UA (https://gpv-ua.com/api)
+
+enum GPVClient {
+    static let base = "https://gpv-ua.com/api/v1"
+
+    static func queues(slug: String) async throws -> [String] {
+        guard let url = Net.url(base, "/regions/\(slug)"),
+              let obj = try await Net.json(url) as? [String: Any],
+              let groups = obj["groups"] as? [[String: Any]] else { return [] }
+        return groups.compactMap { $0["group"] as? String }
+    }
+
+    // Сторінка оператора, де можна дізнатися свою чергу
+    static func lookupPage(slug: String) async -> URL? {
+        guard let url = Net.url(base, "/regions/\(slug)"),
+              let obj = try? await Net.json(url) as? [String: Any],
+              let region = obj["region"] as? [String: Any] else { return nil }
+        let link = (region["lookupUrl"] as? String) ?? (region["url"] as? String)
+        return link.flatMap(URL.init(string:))
+    }
+
+    static func schedule(slug: String, queue: String) async throws -> Schedule {
+        guard let url = Net.url(base, "/regions/\(slug)/groups/\(queue)"),
+              let obj = try await Net.json(url) as? [String: Any] else {
+            throw AppError("GPV-UA: невалідна відповідь")
+        }
+        let rawDays = (obj["days"] as? [[String: Any]]) ?? ((obj["group"] as? [String: Any])?["days"] as? [[String: Any]]) ?? []
+        let today = DayBuilder.day(start: DayBuilder.dayStart(offset: 0), intervals: []).date
+        var days: [DaySchedule] = []
+        var messages: [String] = []
+        var lastChange: Date?
+        for raw in rawDays {
+            guard let dateText = raw["date"] as? String, dateText >= today,
+                  let startMs = raw["start"] as? NSNumber else { continue }
+            let status = raw["status"] as? String ?? "unknown"
+            // unknown = не опубліковано (а не «світло буде»)
+            if status == "unknown" { continue }
+            if status == "emergency" { messages.append("Аварійні відключення — графік не діє") }
+            let start = Date(timeIntervalSince1970: startMs.doubleValue / 1000)
+            let intervals = (raw["intervals"] as? [[Any]] ?? []).compactMap { item -> (Date, Date, Int)? in
+                guard item.count >= 3, let from = item[0] as? NSNumber, let to = item[1] as? NSNumber else { return nil }
+                return (start.addingTimeInterval(from.doubleValue * 60), start.addingTimeInterval(to.doubleValue * 60),
+                        DayBuilder.level(item[2] as? String))
+            }
+            days.append(DayBuilder.day(start: start, intervals: intervals))
+            if let changed = (raw["changedAt"] as? String).flatMap({ ISO8601DateFormatter().date(from: $0) }) {
+                lastChange = max(lastChange ?? changed, changed)
+            }
+        }
+        guard !days.isEmpty else { throw AppError("GPV-UA: немає графіка для черги \(queue)") }
+        var schedule = Schedule(queue: queue, days: days, messages: messages, fetched: lastChange ?? Date())
+        schedule.sourceName = "GPV-UA"
+        return schedule
+    }
+}
+
+// MARK: - Пошук черги за адресою: YASNO (Київ, Дніпропетровщина)
+
+enum YasnoClient {
+    static let base = "https://app.yasno.ua/api/blackout-service/public/shutdowns/addresses/v2"
+
+    private static func items(_ path: String, _ query: [String: String]) async throws -> [(id: Int, value: String)] {
+        guard let url = Net.url(base, path, query), let list = try await Net.json(url) as? [[String: Any]] else { return [] }
+        return list.compactMap { item in
+            guard let id = item["id"] as? Int, let value = item["value"] as? String else { return nil }
+            return (id, value)
+        }
+    }
+
+    private static func normalized(_ text: String) -> String {
+        var value = text.lowercased()
+        for prefix in ["м. ", "с. ", "смт ", "смт. ", "селище ", "вул. ", "вулиця ", "просп. ", "проспект ", "пров. ",
+                       "провулок ", "бул. ", "бульвар ", "пл. ", "площа ", "узвіз ", "наб. ", "шосе "] where value.hasPrefix(prefix) {
+            value = String(value.dropFirst(prefix.count))
+        }
+        return value.replacingOccurrences(of: "’", with: "'").trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func best(_ list: [(id: Int, value: String)], _ wanted: String) -> (id: Int, value: String)? {
+        let target = normalized(wanted)
+        return list.first { normalized($0.value) == target }
+            ?? list.first { normalized($0.value).hasPrefix(target) }
+            ?? list.first
+    }
+
+    static func resolve(regionId: Int, dsoId: Int, hasCities: Bool,
+                        city: String, street: String, house: String) async throws -> (queue: String, label: String) {
+        var common = ["regionId": "\(regionId)", "dsoId": "\(dsoId)"]
+        var cityLabel: String?
+        if hasCities {
+            guard let found = best(try await items("/cities", common.merging(["query": city]) { $1 }), city) else {
+                throw AppError("Населений пункт не знайдено")
+            }
+            common["cityId"] = "\(found.id)"
+            cityLabel = found.value
+        }
+        guard let streetItem = best(try await items("/streets", common.merging(["query": street]) { $1 }), street) else {
+            throw AppError("Вулицю не знайдено")
+        }
+        common["streetId"] = "\(streetItem.id)"
+        guard let houseItem = best(try await items("/houses", common.merging(["query": house]) { $1 }), house) else {
+            throw AppError("Будинок не знайдено")
+        }
+        common["houseId"] = "\(houseItem.id)"
+        guard let url = Net.url(base, "/group", common),
+              let obj = try await Net.json(url) as? [String: Any],
+              let group = obj["group"] as? Int else {
+            throw AppError("YASNO не повернув чергу для цієї адреси")
+        }
+        let queue = "\(group).\((obj["subgroup"] as? Int) ?? 1)"
+        let label = [cityLabel, streetItem.value, houseItem.value].compactMap { $0 }.joined(separator: ", ")
+        return (queue, label)
+    }
+}
+
+// MARK: - Вибір джерела для регіону
+
+enum ScheduleService {
+    static func queues(for region: Region) async -> [String] {
+        if let oblast = region.svitloPulseOblast, let op = region.svitloPulseOperator,
+           let list = try? await SvitloPulseClient.queues(oblast: oblast, operatorId: op), !list.isEmpty {
+            return sortQueues(list)
+        }
+        if let slug = region.gpvSlug, let list = try? await GPVClient.queues(slug: slug), !list.isEmpty {
+            return sortQueues(list)
+        }
+        return region.defaultQueues
+    }
+
+    static func sortQueues(_ list: [String]) -> [String] {
+        Array(Set(list)).sorted { $0.compare($1, options: .numeric) == .orderedAscending }
+    }
+
+    // SvitloPulse → GPV-UA; помилку повертаємо від першого, що відмовив
+    static func schedule(for region: Region, queue: String) async throws -> Schedule {
+        var firstError: Error?
+        if let op = region.svitloPulseOperator {
+            do { return try await SvitloPulseClient.schedule(operatorId: op, queue: queue) }
+            catch { firstError = error; debugLog("SvitloPulse failed: \(error.localizedDescription)") }
+        }
+        if let slug = region.gpvSlug {
+            do { return try await GPVClient.schedule(slug: slug, queue: queue) }
+            catch { firstError = firstError ?? error; debugLog("GPV-UA failed: \(error.localizedDescription)") }
+        }
+        throw firstError ?? AppError("Для регіону немає джерела графіка")
     }
 }
 
@@ -551,80 +824,91 @@ enum MirrorClient {
 // MARK: - Вікно налаштувань
 
 final class SettingsWindowController: NSWindowController {
+    struct Submission {
+        let region: Region
+        let queue: String?   // nil — шукати за адресою
+        let city: String
+        let street: String
+        let house: String
+    }
+
+    private static let autoQueueTitle = "Визначити за адресою"
+    private static let loadingTitle = "Завантажую черги…"
+
+    private let regionPopup = NSPopUpButton()
+    private let queuePopup = NSPopUpButton()
     private let cityField = NSTextField()
     private let streetField = NSTextField()
     private let houseField = NSTextField()
+    private var cityRow: NSStackView!
+    private var addressRows: [NSStackView] = []
+    private let hint = NSTextField(wrappingLabelWithString: "")
+    private let lookupButton = NSButton(title: "Де дізнатися свою чергу?", target: nil, action: nil)
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
-    private let saveButton = NSButton(title: "Зберегти й перевірити", target: nil, action: nil)
+    private let saveButton = NSButton(title: "Зберегти", target: nil, action: nil)
     private let spinner = NSProgressIndicator()
     private let blinkCheckbox = NSButton(checkboxWithTitle: "Блимати в рядку меню за 15 хв до зміни стану",
                                          target: nil, action: nil)
-    private let queuePopup = NSPopUpButton()
-    private static let autoQueueTitle = "Визначити за адресою"
-    var onSave: ((String, String, String) -> Void)?
-    var onSaveQueue: ((String) -> Void)?
+    private var pendingQueue: String?
+    var onSave: ((Submission) -> Void)?
     var onBlinkChange: (() -> Void)?
 
     convenience init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 300),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 380),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "SvitloBar — налаштування адреси"
+        window.title = "SvitloBar — налаштування"
         self.init(window: window)
         buildUI()
+    }
+
+    private func row(_ title: String, _ control: NSView) -> NSStackView {
+        let label = NSTextField(labelWithString: title)
+        label.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        control.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        let stack = NSStackView(views: [label, control])
+        stack.orientation = .horizontal
+        return stack
     }
 
     private func buildUI() {
         guard let content = window?.contentView else { return }
 
-        func row(_ title: String, _ field: NSTextField, _ placeholder: String) -> NSStackView {
-            let label = NSTextField(labelWithString: title)
-            label.widthAnchor.constraint(equalToConstant: 80).isActive = true
-            field.placeholderString = placeholder
-            field.widthAnchor.constraint(equalToConstant: 280).isActive = true
-            let stack = NSStackView(views: [label, field])
-            stack.orientation = .horizontal
-            return stack
-        }
+        regionPopup.addItems(withTitles: Region.all.map(\.name))
+        regionPopup.target = self
+        regionPopup.action = #selector(regionChanged)
+        queuePopup.target = self
+        queuePopup.action = #selector(queueChanged)
 
-        let hint = NSTextField(wrappingLabelWithString:
-            "Черга визначається за адресою на сайті АТ «Вінницяобленерго». Якщо знаєте свою чергу — оберіть її, адреса тоді не потрібна.")
+        cityField.placeholderString = "Дніпро"
+        streetField.placeholderString = "Соборна"
+        houseField.placeholderString = "1"
+        cityRow = row("Місто", cityField)
+        addressRows = [cityRow, row("Вулиця", streetField), row("Будинок", houseField)]
+
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
+        hint.preferredMaxLayoutWidth = 410
+        lookupButton.bezelStyle = .inline
+        lookupButton.target = self
+        lookupButton.action = #selector(openLookupPage)
 
         saveButton.target = self
         saveButton.action = #selector(saveTapped)
         saveButton.keyEquivalent = "\r"
-
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.isDisplayedWhenStopped = false
-
         let buttonRow = NSStackView(views: [saveButton, spinner])
         buttonRow.orientation = .horizontal
 
         statusLabel.font = .systemFont(ofSize: 11)
-
-        queuePopup.addItems(withTitles: [Self.autoQueueTitle] + Store.vinnytsiaQueues)
-        queuePopup.target = self
-        queuePopup.action = #selector(queueChanged)
-        let queueLabel = NSTextField(labelWithString: "Черга")
-        queueLabel.widthAnchor.constraint(equalToConstant: 80).isActive = true
-        let queueRow = NSStackView(views: [queueLabel, queuePopup])
-        queueRow.orientation = .horizontal
-
-        let stack = NSStackView(views: [
-            queueRow,
-            row("Місто", cityField, "Вінниця"),
-            row("Вулиця", streetField, "Соборна"),
-            row("Будинок", houseField, "1"),
-            hint,
-            buttonRow,
-            statusLabel,
-            blinkCheckbox,
-        ])
+        statusLabel.preferredMaxLayoutWidth = 410
         blinkCheckbox.target = self
         blinkCheckbox.action = #selector(blinkToggled)
         blinkCheckbox.state = Store.blinkEnabled ? .on : .off
+
+        let stack = NSStackView(views: [row("Область", regionPopup), row("Черга", queuePopup)]
+                                + addressRows + [hint, lookupButton, buttonRow, statusLabel, blinkCheckbox])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -638,25 +922,75 @@ final class SettingsWindowController: NSWindowController {
         ])
     }
 
-    func prefill(city: String, street: String, house: String) {
-        cityField.stringValue = city
-        streetField.stringValue = street
-        houseField.stringValue = house
-    }
-
-    func prefill(manualQueue: String?) {
-        queuePopup.selectItem(withTitle: manualQueue ?? Self.autoQueueTitle)
-        queueChanged()
+    private var selectedRegion: Region {
+        Region.all[max(0, regionPopup.indexOfSelectedItem)]
     }
 
     private var selectedQueue: String? {
         let title = queuePopup.titleOfSelectedItem
-        return title == Self.autoQueueTitle ? nil : title
+        return title == Self.autoQueueTitle || title == Self.loadingTitle ? nil : title
+    }
+
+    func prefill(region: Region, queue: String?, manual: Bool, city: String, street: String, house: String) {
+        regionPopup.selectItem(withTitle: region.name)
+        cityField.stringValue = city
+        streetField.stringValue = street
+        houseField.stringValue = house
+        pendingQueue = manual ? queue : nil
+        regionChanged()
+    }
+
+    @objc private func regionChanged() {
+        let region = selectedRegion
+        queuePopup.removeAllItems()
+        queuePopup.addItem(withTitle: Self.loadingTitle)
+        queuePopup.isEnabled = false
+        updateAddressVisibility()
+        Task { @MainActor [weak self] in
+            let queues = await ScheduleService.queues(for: region)
+            guard let self, self.selectedRegion.id == region.id else { return }
+            self.queuePopup.removeAllItems()
+            if region.hasAddressLookup { self.queuePopup.addItem(withTitle: Self.autoQueueTitle) }
+            self.queuePopup.addItems(withTitles: queues)
+            if let pending = self.pendingQueue, queues.contains(pending) {
+                self.queuePopup.selectItem(withTitle: pending)
+            }
+            self.pendingQueue = nil
+            self.queuePopup.isEnabled = true
+            self.queueChanged()
+        }
     }
 
     @objc private func queueChanged() {
-        let manual = selectedQueue != nil
-        [cityField, streetField, houseField].forEach { $0.isEnabled = !manual }
+        updateAddressVisibility()
+    }
+
+    private func updateAddressVisibility() {
+        let region = selectedRegion
+        let byAddress = region.hasAddressLookup && selectedQueue == nil
+        addressRows.forEach { $0.isHidden = !byAddress }
+        if case .yasno(_, _, let hasCities) = region.lookup {
+            cityRow.isHidden = !byAddress || !hasCities
+        }
+        lookupButton.isHidden = region.gpvSlug == nil || byAddress
+        switch region.lookup {
+        case .voe:
+            hint.stringValue = "Черга визначається за адресою на сайті «Вінницяобленерго» (може попросити перевірку Cloudflare). Або оберіть чергу вручну."
+        case .yasno:
+            hint.stringValue = "Черга визначається за адресою через YASNO. Або оберіть чергу вручну."
+        case .none:
+            hint.stringValue = "Для цього регіону черга обирається вручну — її вказано на сайті оператора або в особистому кабінеті."
+        }
+        saveButton.title = byAddress ? "Знайти чергу й зберегти" : "Зберегти"
+    }
+
+    @objc private func openLookupPage() {
+        guard let slug = selectedRegion.gpvSlug else { return }
+        Task { @MainActor in
+            if let url = await GPVClient.lookupPage(slug: slug) {
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
 
     func setBusy(_ busy: Bool) {
@@ -676,18 +1010,22 @@ final class SettingsWindowController: NSWindowController {
     }
 
     @objc private func saveTapped() {
-        if let queue = selectedQueue {
-            onSaveQueue?(queue)
+        let region = selectedRegion
+        if queuePopup.titleOfSelectedItem == Self.loadingTitle {
+            setStatus("Зачекайте, завантажую список черг…", isError: true)
             return
         }
         let city = cityField.stringValue.trimmingCharacters(in: .whitespaces)
         let street = streetField.stringValue.trimmingCharacters(in: .whitespaces)
         let house = houseField.stringValue.trimmingCharacters(in: .whitespaces)
-        guard !city.isEmpty, !street.isEmpty, !house.isEmpty else {
-            setStatus("Заповніть усі три поля.", isError: true)
-            return
+        if selectedQueue == nil {
+            let needsCity = cityRow.isHidden == false
+            guard (!needsCity || !city.isEmpty), !street.isEmpty, !house.isEmpty else {
+                setStatus("Заповніть адресу або оберіть чергу.", isError: true)
+                return
+            }
         }
-        onSave?(city, street, house)
+        onSave?(Submission(region: region, queue: selectedQueue, city: city, street: street, house: house))
     }
 }
 
@@ -1040,28 +1378,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Оновлення даних
 
-    // Порядок джерел: SvitloPulse → дзеркало → сайт VOE (останній, бо за Cloudflare).
-    // Без відомої черги спершу питаємо VOE за адресою — він її визначає.
+    // Порядок джерел: SvitloPulse → GPV-UA → (Вінниччина: дзеркало → сайт VOE за Cloudflare).
+    // Без відомої черги у Вінниці спершу питаємо VOE за адресою — він її визначає.
     @objc func refresh() {
         guard Store.isConfigured else { return }
+        let region = Store.region
         if ProcessInfo.processInfo.environment["SVITLOBAR_FORCE_MIRROR"] == "1" {
-            fallbackToMirror(primaryError: "SvitloPulse вимкнено (тест)")
+            fallbackToMirror(primaryError: "Агрегатори вимкнено (тест)")
             return
         }
         guard let queue = Store.queue else {
             refreshFromVOE(primaryError: nil)
             return
         }
-        SvitloPulseClient.fetch(queue: queue) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                switch result {
-                case .success(let schedule):
-                    debugLog("refresh ok (SvitloPulse): \(schedule.days.map(\.date))")
-                    self.apply(schedule, voeError: nil, error: nil)
-                case .failure(let error):
-                    debugLog("refresh failed (SvitloPulse): \(error.localizedDescription)")
-                    self.fallbackToMirror(primaryError: error.localizedDescription)
+        Task { @MainActor [weak self] in
+            do {
+                let schedule = try await ScheduleService.schedule(for: region, queue: queue)
+                debugLog("refresh ok (\(schedule.sourceName ?? "?")): \(region.id) \(queue) \(schedule.days.map(\.date))")
+                self?.apply(schedule, voeError: nil, error: nil)
+            } catch {
+                debugLog("refresh failed: \(region.id) \(queue) \(error.localizedDescription)")
+                if region.id == "vinnytsia" {
+                    self?.fallbackToMirror(primaryError: error.localizedDescription)
+                } else {
+                    self?.apply(self?.schedule, voeError: error.localizedDescription, error: error.localizedDescription)
                 }
             }
         }
@@ -1088,7 +1428,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshFromVOE(primaryError: String?) {
-        guard let config = Store.load(), !Store.manualQueue else {
+        guard Store.region.id == "vinnytsia", let config = Store.load(), !Store.manualQueue else {
             let message = primaryError ?? "Немає даних для черги"
             apply(schedule, voeError: message, error: message)
             return
@@ -1289,7 +1629,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let stale = voeError != nil
             return menuView(vStack([label(stale ? "Графік застарів" : "Графіка на сьогодні немає", size: 15, weight: .bold),
                                     label(stale ? "Не вдалося оновити, нижче останній отриманий"
-                                                : "Сайт VOE ще не опублікував дані",
+                                                : "Оператор ще не опублікував графік",
                                           size: 12, color: .secondaryLabelColor)]),
                             top: 8)
         }
@@ -1392,10 +1732,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
         let queueText = (schedule?.queue ?? Store.queue).map { "черга \($0)" }
-        if let config = Store.load(), !Store.manualQueue {
-            menu.addItem(disabled([config.shortLabel, queueText].compactMap { $0 }.joined(separator: " • ")))
-        } else if let queueText {
-            menu.addItem(disabled("Вінницяобленерго • \(queueText)"))
+        if Store.isConfigured {
+            let place = Store.addressLabel ?? Store.region.operatorName
+            menu.addItem(disabled([place, queueText].compactMap { $0 }.joined(separator: " • ")))
         }
         if let schedule {
             let formatter = DateFormatter()
@@ -1421,8 +1760,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         menu.addItem(makeItem("Оновити зараз", #selector(refresh), "r"))
         menu.addItem(makeItem("Налаштування…", #selector(openSettings), ","))
-        menu.addItem(makeItem("Відкрити сайт VOE", #selector(openSite), ""))
-        menu.addItem(makeItem("Пройти перевірку Cloudflare…", #selector(solveChallenge), ""))
+        if Store.region.id == "vinnytsia" && !Store.manualQueue {
+            menu.addItem(makeItem("Відкрити сайт VOE", #selector(openSite), ""))
+            menu.addItem(makeItem("Пройти перевірку Cloudflare…", #selector(solveChallenge), ""))
+        }
 
         if #available(macOS 13.0, *) {
             let login = makeItem("Запускати при вході", #selector(toggleLoginItem), "")
@@ -1551,40 +1892,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func openSettings() {
         if settingsController == nil {
             let controller = SettingsWindowController()
-            controller.onSave = { [weak self] city, street, house in
-                self?.saveAddress(city: city, street: street, house: house)
+            controller.onSave = { [weak self] submission in
+                self?.save(submission)
             }
             controller.onBlinkChange = { [weak self] in
                 self?.updateTitle()
             }
-            controller.onSaveQueue = { [weak self] queue in
-                self?.saveManualQueue(queue)
-            }
             settingsController = controller
         }
-        if let config = Store.load() {
-            let city = config.cityLabel.components(separatedBy: " (").first?
-                .replacingOccurrences(of: "м.", with: "") ?? ""
-            let street = config.streetLabel
-            settingsController?.prefill(city: city, street: street, house: config.houseLabel)
+        var city = "", street = "", house = ""
+        if Store.region.id == "vinnytsia", let config = Store.load() {
+            city = config.cityLabel.components(separatedBy: " (").first?.replacingOccurrences(of: "м.", with: "")
+                .trimmingCharacters(in: .whitespaces) ?? ""
+            street = config.streetLabel
+            house = config.houseLabel
         }
-        settingsController?.prefill(manualQueue: Store.manualQueue ? Store.queue : nil)
+        settingsController?.prefill(region: Store.region, queue: Store.queue, manual: Store.manualQueue || !Store.region.hasAddressLookup,
+                                    city: city, street: street, house: house)
         settingsController?.window?.center()
         settingsController?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    private func saveManualQueue(_ queue: String) {
-        Store.queue = queue
-        Store.manualQueue = true
-        settingsController?.setStatus("Збережено: черга \(queue). Отримую графік…", isError: false)
-        schedule = nil
-        refresh()
-        settingsController?.setStatus("Готово. Черга \(queue)", isError: false)
+    private func save(_ submission: SettingsWindowController.Submission) {
+        if let queue = submission.queue {
+            Store.region = submission.region
+            Store.queue = queue
+            Store.manualQueue = true
+            Store.addressLabel = nil
+            finishSave(status: "Збережено: \(submission.region.operatorName), черга \(queue)")
+            return
+        }
+        switch submission.region.lookup {
+        case .voe:
+            saveVOEAddress(city: submission.city, street: submission.street, house: submission.house)
+        case .yasno(let regionId, let dsoId, let hasCities):
+            settingsController?.setBusy(true)
+            settingsController?.setStatus("Шукаю адресу в довіднику YASNO…", isError: false)
+            Task { @MainActor [weak self] in
+                do {
+                    let found = try await YasnoClient.resolve(regionId: regionId, dsoId: dsoId, hasCities: hasCities,
+                                                              city: submission.city, street: submission.street,
+                                                              house: submission.house)
+                    Store.region = submission.region
+                    Store.queue = found.queue
+                    Store.manualQueue = false
+                    Store.addressLabel = found.label
+                    self?.settingsController?.setBusy(false)
+                    self?.finishSave(status: "Готово. Черга \(found.queue) — \(found.label)")
+                } catch {
+                    self?.settingsController?.setBusy(false)
+                    self?.settingsController?.setStatus(error.localizedDescription, isError: true)
+                }
+            }
+        case .none:
+            settingsController?.setStatus("Оберіть чергу зі списку.", isError: true)
+        }
     }
 
-    private func saveAddress(city: String, street: String, house: String) {
-        Store.manualQueue = false
+    private func finishSave(status: String) {
+        settingsController?.setStatus(status, isError: false)
+        schedule = nil
+        lastError = nil
+        voeError = nil
+        updateTitle()
+        rebuildMenu()
+        refresh()
+    }
+
+    private func saveVOEAddress(city: String, street: String, house: String) {
         settingsController?.setBusy(true)
         settingsController?.setStatus("Шукаю адресу в довіднику VOE…", isError: false)
         client.resolveAddress(city: city, street: street, house: house) { [weak self] result in
@@ -1596,20 +1972,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.settingsController?.setStatus(error.localizedDescription, isError: true)
                 case .success(let config):
                     Store.save(config)
-                    self.settingsController?.setStatus("Адресу знайдено: \(config.shortLabel). Отримую графік…", isError: false)
+                    Store.region = Region.find("vinnytsia")
+                    Store.manualQueue = false
+                    Store.addressLabel = config.shortLabel
+                    self.settingsController?.setStatus("Адресу знайдено: \(config.shortLabel). Визначаю чергу…", isError: false)
                     self.client.fetchSchedule(config: config) { scheduleResult in
                         DispatchQueue.main.async {
                             self.settingsController?.setBusy(false)
                             switch scheduleResult {
                             case .success(let schedule):
                                 Store.queue = schedule.queue
-                                self.schedule = schedule
-                                self.lastError = nil
-                                self.voeError = nil
-                                self.settingsController?.setStatus(
-                                    "Готово. Черга \(schedule.queue) — \(config.shortLabel)", isError: false)
-                                self.updateTitle()
-                                self.rebuildMenu()
+                                self.finishSave(status: "Готово. Черга \(schedule.queue) — \(config.shortLabel)")
                             case .failure(let error):
                                 self.lastError = error.localizedDescription
                                 self.settingsController?.setStatus(error.localizedDescription, isError: true)
