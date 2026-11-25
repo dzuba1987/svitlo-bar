@@ -1,4 +1,6 @@
-# SvitloBar
+<p align="center"><img src="assets/logo.png" width="160" alt="SvitloBar"></p>
+
+<h1 align="center">SvitloBar</h1>
 
 Графік відключень світла у рядку меню macOS — 23 регіони України.
 
@@ -32,6 +34,7 @@
 ## Для розробника
 
 - `./build.sh` — зібрати й встановити локально.
+- Іконка: `assets/icon.svg` → `swift tools/make-icon.swift` (оновить `AppIcon.icns` і `assets/logo.png`).
 - Кожен push у `main` автоматично збирає додаток і публікує реліз (GitHub Actions),
   версія підіймається сама: 1.1 → 1.2 → 1.3… Опис релізу = повідомлення коміту.
 - `./release.sh "що змінилось"` — коміт + push одним рядком.

@@ -2,13 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleName</key>
-	<string>SvitloBar</string>
 	<key>CFBundleDisplayName</key>
 	<string>SvitloBar</string>
+	<key>CFBundleExecutable</key>
+	<string>SvitloBar</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>ua.vn.svitlobar</string>
-	<key>CFBundleExecutable</key>
+	<key>CFBundleName</key>
 	<string>SvitloBar</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>

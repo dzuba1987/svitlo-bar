@@ -18,6 +18,8 @@ done
 lipo -create -output "$APP/Contents/MacOS/SvitloBar" "$BUILD_DIR/SvitloBar-arm64" "$BUILD_DIR/SvitloBar-x86_64"
 
 cp Info.plist "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Resources"
+cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
 codesign --force --sign - "$APP"
