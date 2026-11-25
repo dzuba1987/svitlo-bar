@@ -12,6 +12,13 @@
 
 Працює на macOS 13+ (Apple Silicon та Intel).
 
+## Звідки дані
+
+1. [SvitloPulse](https://svitlopulse.andrewboyko.name/api/) — основне джерело (відкритий API, оновлюється щохвилини).
+2. [Дзеркало vn-progr](https://github.com/vn-progr/gpv-voe-vinnytsia) — якщо SvitloPulse недоступний.
+3. Сайт [VOE](https://disconnection.voe.com.ua/) — визначає чергу за адресою і є останнім запасним варіантом
+   (може попросити перевірку Cloudflare). Чергу можна обрати й вручну в налаштуваннях.
+
 ## Оновлення
 
 Додаток сам перевіряє нові релізи кожні 6 годин. Коли є нова версія, у меню з'явиться

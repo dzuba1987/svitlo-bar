@@ -48,6 +48,7 @@ struct Schedule {
     let messages: [String]
     let fetched: Date
     var mirrorUpdated: Date? = nil  // не nil — дані з неофіційного дзеркала
+    var sourceName: String? = nil   // не nil — агрегатор (SvitloPulse), а не сайт VOE
 }
 
 struct AppError: Error, LocalizedError {
@@ -77,6 +78,16 @@ enum Store {
         get { UserDefaults.standard.string(forKey: "queue") }
         set { UserDefaults.standard.set(newValue, forKey: "queue") }
     }
+
+    static let vinnytsiaQueues = ["1.1", "1.2", "2.1", "2.2", "3.1", "3.2", "4.1", "4.2", "5.1", "5.2", "6.1", "6.2"]
+
+    // Черга обрана вручну (адресу на сайті VOE не шукаємо)
+    static var manualQueue: Bool {
+        get { UserDefaults.standard.bool(forKey: "manualQueue") }
+        set { UserDefaults.standard.set(newValue, forKey: "manualQueue") }
+    }
+
+    static var isConfigured: Bool { queue != nil || load() != nil }
 
     static func save(_ config: AddressConfig) {
         if let data = try? JSONEncoder().encode(config) {
@@ -373,6 +384,91 @@ final class VOEClient: NSObject, WKNavigationDelegate {
     }
 }
 
+// MARK: - Основне джерело: SvitloPulse (відкритий API агрегатора, без Cloudflare)
+// https://svitlopulse.andrewboyko.name/api/ — графік черги на сьогодні й завтра, оновлення ~щохвилини.
+
+enum SvitloPulseClient {
+    static let base = "https://svitlopulse.andrewboyko.name/api/v1"
+    static let operatorId = "vinnytsiaoblenergo"
+
+    static func fetch(queue: String, completion: @escaping (Result<Schedule, Error>) -> Void) {
+        guard let url = URL(string: "\(base)/groups/\(operatorId)/\(queue)") else {
+            return completion(.failure(AppError("SvitloPulse: некоректна черга \(queue)")))
+        }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        request.setValue("SvitloBar/\(Updater.currentVersion)", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error { return completion(.failure(error)) }
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard status == 200 else { return completion(.failure(AppError("SvitloPulse: HTTP \(status)"))) }
+            do {
+                completion(.success(try parse(data ?? Data(), queue: queue)))
+            } catch {
+                completion(.failure(error))
+            }
+        }.resume()
+    }
+
+    static func parse(_ data: Data, queue: String) throws -> Schedule {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let group = obj["group"] as? [String: Any] else {
+            throw AppError("SvitloPulse: невалідний JSON")
+        }
+        let op = obj["operator"] as? [String: Any]
+        if (op?["stale"] as? Bool) == true {
+            throw AppError("SvitloPulse: дані оператора застаріли")
+        }
+        let iso = ISO8601DateFormatter()
+        let isoFrac = ISO8601DateFormatter()
+        isoFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        func date(_ value: Any?) -> Date? {
+            guard let text = value as? String else { return nil }
+            return iso.date(from: text) ?? isoFrac.date(from: text)
+        }
+
+        let kyiv = TimeZone(identifier: "Europe/Kyiv") ?? .current
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = kyiv
+        let dateFormatter = DateFormatter()
+        dateFormatter.timeZone = kyiv
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let labelFormatter = DateFormatter()
+        labelFormatter.timeZone = kyiv
+        labelFormatter.locale = Locale(identifier: "uk_UA")
+        labelFormatter.dateFormat = "EEEEEE dd.MM"
+
+        let now = Date()
+        var days: [DaySchedule] = []
+        for (offset, key) in ["today", "tomorrow"].enumerated() {
+            let intervals = group[key] as? [[String: Any]] ?? []
+            // Порожній «завтра» = ще не опубліковано (як і в дзеркалі)
+            if offset > 0 && intervals.isEmpty { continue }
+            guard let dayStart = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: now)) else { continue }
+            var slots = [Int](repeating: 0, count: slotsPerDay)
+            for interval in intervals {
+                guard let start = date(interval["start"]), let end = date(interval["end"]) else { continue }
+                let level = (interval["kind"] as? String) == "off" ? 4 : 2
+                for slot in 0..<slotsPerDay {
+                    let slotStart = dayStart.addingTimeInterval(Double(slot * slotMinutes * 60))
+                    let slotEnd = slotStart.addingTimeInterval(Double(slotMinutes * 60))
+                    if slotStart < end && slotEnd > start { slots[slot] = max(slots[slot], level) }
+                }
+            }
+            let label = labelFormatter.string(from: dayStart)
+            days.append(DaySchedule(date: dateFormatter.string(from: dayStart),
+                                    label: label.prefix(1).uppercased() + label.dropFirst(), slots: slots))
+        }
+
+        var messages: [String] = []
+        if (group["class"] as? String) == "emergency" || ((group["plan_status"] as? String).map { $0 != "applies" } ?? false) {
+            messages.append("Аварійні відключення — графік може не діяти")
+        }
+        var schedule = Schedule(queue: queue, days: days, messages: messages, fetched: date(op?["updated_at"]) ?? now)
+        schedule.sourceName = "SvitloPulse"
+        return schedule
+    }
+}
+
 // MARK: - Резервне джерело: неофіційне дзеркало графіка на GitHub
 // https://github.com/vn-progr/gpv-voe-vinnytsia — збирає дані з bezsvitla.com.ua кожні кілька хвилин.
 // Використовується лише коли сайт VOE недоступний (перевірка Cloudflare).
@@ -463,7 +559,10 @@ final class SettingsWindowController: NSWindowController {
     private let spinner = NSProgressIndicator()
     private let blinkCheckbox = NSButton(checkboxWithTitle: "Блимати в рядку меню за 15 хв до зміни стану",
                                          target: nil, action: nil)
+    private let queuePopup = NSPopUpButton()
+    private static let autoQueueTitle = "Визначити за адресою"
     var onSave: ((String, String, String) -> Void)?
+    var onSaveQueue: ((String) -> Void)?
     var onBlinkChange: (() -> Void)?
 
     convenience init() {
@@ -488,7 +587,7 @@ final class SettingsWindowController: NSWindowController {
         }
 
         let hint = NSTextField(wrappingLabelWithString:
-            "Черга відключень визначається автоматично за адресою (дані АТ «Вінницяобленерго»).")
+            "Черга визначається за адресою на сайті АТ «Вінницяобленерго». Якщо знаєте свою чергу — оберіть її, адреса тоді не потрібна.")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
 
@@ -505,7 +604,16 @@ final class SettingsWindowController: NSWindowController {
 
         statusLabel.font = .systemFont(ofSize: 11)
 
+        queuePopup.addItems(withTitles: [Self.autoQueueTitle] + Store.vinnytsiaQueues)
+        queuePopup.target = self
+        queuePopup.action = #selector(queueChanged)
+        let queueLabel = NSTextField(labelWithString: "Черга")
+        queueLabel.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        let queueRow = NSStackView(views: [queueLabel, queuePopup])
+        queueRow.orientation = .horizontal
+
         let stack = NSStackView(views: [
+            queueRow,
             row("Місто", cityField, "Вінниця"),
             row("Вулиця", streetField, "Соборна"),
             row("Будинок", houseField, "1"),
@@ -536,6 +644,21 @@ final class SettingsWindowController: NSWindowController {
         houseField.stringValue = house
     }
 
+    func prefill(manualQueue: String?) {
+        queuePopup.selectItem(withTitle: manualQueue ?? Self.autoQueueTitle)
+        queueChanged()
+    }
+
+    private var selectedQueue: String? {
+        let title = queuePopup.titleOfSelectedItem
+        return title == Self.autoQueueTitle ? nil : title
+    }
+
+    @objc private func queueChanged() {
+        let manual = selectedQueue != nil
+        [cityField, streetField, houseField].forEach { $0.isEnabled = !manual }
+    }
+
     func setBusy(_ busy: Bool) {
         saveButton.isEnabled = !busy
         if busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
@@ -553,6 +676,10 @@ final class SettingsWindowController: NSWindowController {
     }
 
     @objc private func saveTapped() {
+        if let queue = selectedQueue {
+            onSaveQueue?(queue)
+            return
+        }
         let city = cityField.stringValue.trimmingCharacters(in: .whitespaces)
         let street = streetField.stringValue.trimmingCharacters(in: .whitespaces)
         let house = houseField.stringValue.trimmingCharacters(in: .whitespaces)
@@ -886,7 +1013,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.title = "⚡︎…"
         rebuildMenu()
 
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 5 * 60, repeats: true) { [weak self] _ in
             self?.refresh()
         }
         titleTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
@@ -900,7 +1027,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.checkForUpdates(silently: true)
         }
 
-        if Store.load() == nil {
+        if !Store.isConfigured {
             openSettings()
         } else {
             refresh()
@@ -913,11 +1040,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Оновлення даних
 
+    // Порядок джерел: SvitloPulse → дзеркало → сайт VOE (останній, бо за Cloudflare).
+    // Без відомої черги спершу питаємо VOE за адресою — він її визначає.
     @objc func refresh() {
-        guard let config = Store.load() else { return }
-        // Для перевірки резервного джерела: SVITLOBAR_FORCE_MIRROR=1
+        guard Store.isConfigured else { return }
         if ProcessInfo.processInfo.environment["SVITLOBAR_FORCE_MIRROR"] == "1" {
-            fallbackToMirror(voeError: "Сайт просить перевірку безпеки (тест)")
+            fallbackToMirror(primaryError: "SvitloPulse вимкнено (тест)")
+            return
+        }
+        guard let queue = Store.queue else {
+            refreshFromVOE(primaryError: nil)
+            return
+        }
+        SvitloPulseClient.fetch(queue: queue) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let schedule):
+                    debugLog("refresh ok (SvitloPulse): \(schedule.days.map(\.date))")
+                    self.apply(schedule, voeError: nil, error: nil)
+                case .failure(let error):
+                    debugLog("refresh failed (SvitloPulse): \(error.localizedDescription)")
+                    self.fallbackToMirror(primaryError: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func fallbackToMirror(primaryError: String) {
+        guard let queue = Store.queue ?? schedule?.queue else {
+            refreshFromVOE(primaryError: primaryError)
+            return
+        }
+        MirrorClient.fetch(queue: queue) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let mirror):
+                    debugLog("refresh ok (mirror): \(mirror.days.map(\.date))")
+                    self.apply(mirror, voeError: primaryError, error: nil)
+                case .failure(let error):
+                    debugLog("mirror failed: \(error.localizedDescription)")
+                    self.refreshFromVOE(primaryError: primaryError)
+                }
+            }
+        }
+    }
+
+    private func refreshFromVOE(primaryError: String?) {
+        guard let config = Store.load(), !Store.manualQueue else {
+            let message = primaryError ?? "Немає даних для черги"
+            apply(schedule, voeError: message, error: message)
             return
         }
         client.fetchSchedule(config: config) { [weak self] result in
@@ -930,28 +1103,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.apply(schedule, voeError: nil, error: nil)
                 case .failure(let error):
                     debugLog("refresh failed (VOE): \(error.localizedDescription)")
-                    self.fallbackToMirror(voeError: error.localizedDescription)
-                }
-            }
-        }
-    }
-
-    // Офіційний сайт недоступний — пробуємо неофіційне дзеркало
-    private func fallbackToMirror(voeError: String) {
-        guard let queue = Store.queue ?? schedule?.queue else {
-            apply(schedule, voeError: voeError, error: voeError)
-            return
-        }
-        MirrorClient.fetch(queue: queue) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                switch result {
-                case .success(let mirror):
-                    debugLog("refresh ok (mirror): \(mirror.days.map(\.date))")
-                    self.apply(mirror, voeError: voeError, error: nil)
-                case .failure(let error):
-                    debugLog("mirror failed: \(error.localizedDescription)")
-                    self.apply(self.schedule, voeError: voeError, error: voeError)
+                    let message = primaryError ?? error.localizedDescription
+                    self.apply(self.schedule, voeError: error.localizedDescription, error: message)
                 }
             }
         }
@@ -1215,7 +1368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let lastError, !lastError.contains("перевірку безпеки") {
             menu.addItem(disabled("⚠️ \(lastError)"))
         }
-        if let voeError, voeError.contains("перевірку безпеки"), schedule?.mirrorUpdated == nil {
+        if let voeError, voeError.contains("перевірку безпеки"), schedule == nil {
             // Немає навіть дзеркала — клікабельно відкриває вікно перевірки
             let item = makeItem("⚠️ Потрібна перевірка Cloudflare — натисніть", #selector(solveChallenge), "")
             item.toolTip = voeError
@@ -1238,14 +1391,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        if let config = Store.load() {
-            let queue = schedule.map { " • черга \($0.queue)" } ?? ""
-            menu.addItem(disabled("\(config.shortLabel)\(queue)"))
+        let queueText = (schedule?.queue ?? Store.queue).map { "черга \($0)" }
+        if let config = Store.load(), !Store.manualQueue {
+            menu.addItem(disabled([config.shortLabel, queueText].compactMap { $0 }.joined(separator: " • ")))
+        } else if let queueText {
+            menu.addItem(disabled("Вінницяобленерго • \(queueText)"))
         }
         if let schedule {
             let formatter = DateFormatter()
             formatter.dateFormat = "HH:mm"
-            if let mirrorUpdated = schedule.mirrorUpdated {
+            if let sourceName = schedule.sourceName {
+                menu.addItem(disabled("Джерело: \(sourceName) · дані оператора о \(formatter.string(from: schedule.fetched))"))
+            } else if let mirrorUpdated = schedule.mirrorUpdated {
                 menu.addItem(disabled("Джерело: неофіційне дзеркало · оновлено о \(formatter.string(from: mirrorUpdated))"))
                 let item = makeItem("Сайт VOE просить перевірку — пройти для офіційних даних", #selector(solveChallenge), "")
                 item.toolTip = voeError
@@ -1400,6 +1557,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             controller.onBlinkChange = { [weak self] in
                 self?.updateTitle()
             }
+            controller.onSaveQueue = { [weak self] queue in
+                self?.saveManualQueue(queue)
+            }
             settingsController = controller
         }
         if let config = Store.load() {
@@ -1408,12 +1568,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let street = config.streetLabel
             settingsController?.prefill(city: city, street: street, house: config.houseLabel)
         }
+        settingsController?.prefill(manualQueue: Store.manualQueue ? Store.queue : nil)
         settingsController?.window?.center()
         settingsController?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    private func saveManualQueue(_ queue: String) {
+        Store.queue = queue
+        Store.manualQueue = true
+        settingsController?.setStatus("Збережено: черга \(queue). Отримую графік…", isError: false)
+        schedule = nil
+        refresh()
+        settingsController?.setStatus("Готово. Черга \(queue)", isError: false)
+    }
+
     private func saveAddress(city: String, street: String, house: String) {
+        Store.manualQueue = false
         settingsController?.setBusy(true)
         settingsController?.setStatus("Шукаю адресу в довіднику VOE…", isError: false)
         client.resolveAddress(city: city, street: street, house: house) { [weak self] result in
