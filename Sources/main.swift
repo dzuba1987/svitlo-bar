@@ -18,7 +18,7 @@ func debugLog(_ message: String) {
 
 // MARK: - Моделі
 
-struct AddressConfig: Codable {
+struct AddressConfig: Codable, Equatable {
     var cityId: String
     var cityLabel: String
     var streetId: String
@@ -145,51 +145,119 @@ struct Region {
 
 // MARK: - Налаштування (UserDefaults)
 
-enum Store {
-    static let key = "addressConfig"
+// Місце: дім, офіс… — своя адреса, регіон і черга
+struct Place: Codable, Equatable {
+    var id: String
+    var name: String
+    var regionId: String
+    var queue: String?
+    var manualQueue: Bool
+    var addressLabel: String?
+    var voeAddress: AddressConfig?
 
-    static func load() -> AddressConfig? {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
-        return try? JSONDecoder().decode(AddressConfig.self, from: data)
-    }
+    var region: Region { Region.find(regionId) }
+    var isConfigured: Bool { queue != nil || voeAddress != nil }
+    var displayAddress: String? { addressLabel ?? (manualQueue ? nil : voeAddress?.shortLabel) }
+}
+
+enum Store {
+    private static let placesKey = "places"
+    private static let defaults = UserDefaults.standard
 
     // Миготіння напису за 15 хв до зміни стану (за замовчуванням вимкнено)
     static var blinkEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: "blinkEnabled") as? Bool ?? false }
-        set { UserDefaults.standard.set(newValue, forKey: "blinkEnabled") }
+        get { defaults.object(forKey: "blinkEnabled") as? Bool ?? false }
+        set { defaults.set(newValue, forKey: "blinkEnabled") }
     }
 
-    // Остання черга з офіційного сайту — потрібна для запиту до дзеркала
-    static var queue: String? {
-        get { UserDefaults.standard.string(forKey: "queue") }
-        set { UserDefaults.standard.set(newValue, forKey: "queue") }
-    }
-
-    // До мультирегіональності всі були у Вінниці — це значення за замовчуванням
-    static var region: Region {
-        get { Region.find(UserDefaults.standard.string(forKey: "regionId")) }
-        set { UserDefaults.standard.set(newValue.id, forKey: "regionId") }
-    }
-
-    // Підпис адреси для меню (VOE або YASNO); nil — черга обрана вручну
-    static var addressLabel: String? {
-        get { UserDefaults.standard.string(forKey: "addressLabel") ?? (manualQueue ? nil : load()?.shortLabel) }
-        set { UserDefaults.standard.set(newValue, forKey: "addressLabel") }
-    }
-
-    // Черга обрана вручну (адресу на сайті VOE не шукаємо)
-    static var manualQueue: Bool {
-        get { UserDefaults.standard.bool(forKey: "manualQueue") }
-        set { UserDefaults.standard.set(newValue, forKey: "manualQueue") }
-    }
-
-    static var isConfigured: Bool { queue != nil || load() != nil }
-
-    static func save(_ config: AddressConfig) {
-        if let data = try? JSONEncoder().encode(config) {
-            UserDefaults.standard.set(data, forKey: key)
+    static var places: [Place] {
+        get {
+            if let data = defaults.data(forKey: placesKey),
+               let list = try? JSONDecoder().decode([Place].self, from: data) {
+                return list
+            }
+            return legacyPlace().map { [$0] } ?? []
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) { defaults.set(data, forKey: placesKey) }
         }
     }
+
+    // Налаштування до версії з кількома місцями — стають місцем «Дім»
+    private static func legacyPlace() -> Place? {
+        let voe = defaults.data(forKey: "addressConfig").flatMap { try? JSONDecoder().decode(AddressConfig.self, from: $0) }
+        let queue = defaults.string(forKey: "queue")
+        guard queue != nil || voe != nil else { return nil }
+        return Place(id: "home", name: "Дім", regionId: defaults.string(forKey: "regionId") ?? "vinnytsia",
+                     queue: queue, manualQueue: defaults.bool(forKey: "manualQueue"),
+                     addressLabel: defaults.string(forKey: "addressLabel"), voeAddress: voe)
+    }
+
+    // Місце, чий стан показується в рядку меню
+    static var activePlaceId: String {
+        get { defaults.string(forKey: "activePlaceId") ?? places.first?.id ?? "home" }
+        set { defaults.set(newValue, forKey: "activePlaceId") }
+    }
+
+    static var activePlace: Place? {
+        let list = places
+        return list.first { $0.id == activePlaceId } ?? list.first
+    }
+
+    static var otherPlaces: [Place] {
+        let active = activePlace?.id
+        return places.filter { $0.id != active }
+    }
+
+    static func upsert(_ place: Place) {
+        var list = places
+        if let index = list.firstIndex(where: { $0.id == place.id }) {
+            list[index] = place
+        } else {
+            list.append(place)
+        }
+        places = list
+    }
+
+    static func remove(id: String) {
+        places = places.filter { $0.id != id }
+        if activePlaceId == id, let first = places.first { activePlaceId = first.id }
+    }
+
+    // Нижче — поля активного місця (так їх читає решта коду)
+    private static func mutateActive(_ change: (inout Place) -> Void) {
+        var place = activePlace ?? Place(id: "home", name: "Дім", regionId: "vinnytsia", queue: nil,
+                                         manualQueue: false, addressLabel: nil, voeAddress: nil)
+        change(&place)
+        upsert(place)
+        activePlaceId = place.id
+    }
+
+    static func load() -> AddressConfig? { activePlace?.voeAddress }
+
+    static func save(_ config: AddressConfig) { mutateActive { $0.voeAddress = config } }
+
+    static var queue: String? {
+        get { activePlace?.queue }
+        set { mutateActive { $0.queue = newValue } }
+    }
+
+    static var region: Region {
+        get { activePlace?.region ?? Region.find(nil) }
+        set { mutateActive { $0.regionId = newValue.id } }
+    }
+
+    static var addressLabel: String? {
+        get { activePlace?.displayAddress }
+        set { mutateActive { $0.addressLabel = newValue } }
+    }
+
+    static var manualQueue: Bool {
+        get { activePlace?.manualQueue ?? false }
+        set { mutateActive { $0.manualQueue = newValue } }
+    }
+
+    static var isConfigured: Bool { activePlace?.isConfigured ?? false }
 }
 
 // MARK: - Клієнт VOE (прихований WKWebView: проходить Cloudflare, API кличеться зі сторінки)
@@ -825,6 +893,8 @@ enum MirrorClient {
 
 final class SettingsWindowController: NSWindowController {
     struct Submission {
+        let placeId: String?  // nil — нове місце
+        let name: String
         let region: Region
         let queue: String?   // nil — шукати за адресою
         let city: String
@@ -835,6 +905,11 @@ final class SettingsWindowController: NSWindowController {
     private static let autoQueueTitle = "Визначити за адресою"
     private static let loadingTitle = "Завантажую черги…"
 
+    private static let newPlaceTitle = "＋ Нове місце…"
+    private let placePopup = NSPopUpButton()
+    private let nameField = NSTextField()
+    private let deleteButton = NSButton(title: "Видалити", target: nil, action: nil)
+    private var places: [Place] = []
     private let regionPopup = NSPopUpButton()
     private let queuePopup = NSPopUpButton()
     private let cityField = NSTextField()
@@ -853,10 +928,11 @@ final class SettingsWindowController: NSWindowController {
                                          target: nil, action: nil)
     private var pendingQueue: String?
     var onSave: ((Submission) -> Void)?
+    var onDelete: ((String) -> Void)?
     var onBlinkChange: (() -> Void)?
 
     convenience init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 440),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 500),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "SvitloBar — налаштування"
         self.init(window: window)
@@ -874,6 +950,15 @@ final class SettingsWindowController: NSWindowController {
 
     private func buildUI() {
         guard let content = window?.contentView else { return }
+
+        placePopup.target = self
+        placePopup.action = #selector(placeChanged)
+        deleteButton.bezelStyle = .rounded
+        deleteButton.target = self
+        deleteButton.action = #selector(deleteTapped)
+        nameField.placeholderString = "Дім, Офіс…"
+        let placeControls = NSStackView(views: [placePopup, deleteButton])
+        placeControls.orientation = .horizontal
 
         regionPopup.addItems(withTitles: Region.all.map(\.name))
         regionPopup.target = self
@@ -912,7 +997,11 @@ final class SettingsWindowController: NSWindowController {
         blinkCheckbox.action = #selector(blinkToggled)
         blinkCheckbox.state = Store.blinkEnabled ? .on : .off
 
-        let stack = NSStackView(views: [row("Область", regionPopup), row("Черга", queuePopup)]
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.widthAnchor.constraint(equalToConstant: 410).isActive = true
+        let stack = NSStackView(views: [row("Місце", placeControls), row("Назва", nameField), separator,
+                                        row("Область", regionPopup), row("Черга", queuePopup)]
                                 + addressRows + [hint, lookupButton, buttonRow, statusLabel, blinkCheckbox, menuBarHint])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -934,6 +1023,50 @@ final class SettingsWindowController: NSWindowController {
     private var selectedQueue: String? {
         let title = queuePopup.titleOfSelectedItem
         return title == Self.autoQueueTitle || title == Self.loadingTitle ? nil : title
+    }
+
+    // Список місць у верхньому меню; nil у selecting — нове місце
+    func show(places: [Place], selecting id: String?) {
+        self.places = places
+        placePopup.removeAllItems()
+        placePopup.addItems(withTitles: places.map(\.name) + [Self.newPlaceTitle])
+        if let id, let index = places.firstIndex(where: { $0.id == id }) {
+            placePopup.selectItem(at: index)
+        } else {
+            placePopup.selectItem(withTitle: Self.newPlaceTitle)
+        }
+        placeChanged()
+    }
+
+    private var selectedPlace: Place? {
+        let index = placePopup.indexOfSelectedItem
+        return index >= 0 && index < places.count ? places[index] : nil
+    }
+
+    @objc private func placeChanged() {
+        setStatus("", isError: false)
+        deleteButton.isEnabled = selectedPlace != nil && places.count > 1
+        guard let place = selectedPlace else {
+            let taken = Set(places.map(\.name))
+            nameField.stringValue = ["Дім", "Офіс", "Дача", "Батьки"].first { !taken.contains($0) } ?? "Місце \(places.count + 1)"
+            prefill(region: places.first?.region ?? Region.find(nil), queue: nil, manual: false, city: "", street: "", house: "")
+            return
+        }
+        nameField.stringValue = place.name
+        var city = "", street = "", house = ""
+        if place.regionId == "vinnytsia", let address = place.voeAddress {
+            city = address.cityLabel.components(separatedBy: " (").first?.replacingOccurrences(of: "м.", with: "")
+                .trimmingCharacters(in: .whitespaces) ?? ""
+            street = address.streetLabel
+            house = address.houseLabel
+        }
+        prefill(region: place.region, queue: place.queue, manual: place.manualQueue || !place.region.hasAddressLookup,
+                city: city, street: street, house: house)
+    }
+
+    @objc private func deleteTapped() {
+        guard let place = selectedPlace, places.count > 1 else { return }
+        onDelete?(place.id)
     }
 
     func prefill(region: Region, queue: String?, manual: Bool, city: String, street: String, house: String) {
@@ -1031,7 +1164,9 @@ final class SettingsWindowController: NSWindowController {
                 return
             }
         }
-        onSave?(Submission(region: region, queue: selectedQueue, city: city, street: street, house: house))
+        let name = nameField.stringValue.trimmingCharacters(in: .whitespaces)
+        onSave?(Submission(placeId: selectedPlace?.id, name: name.isEmpty ? "Місце" : name, region: region,
+                           queue: selectedQueue, city: city, street: street, house: house))
     }
 }
 
@@ -1350,6 +1485,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var animText = ""
     private var updateTimer: Timer?
     private var availableUpdate: Updater.Release?
+    private var otherSchedules: [String: Schedule] = [:]
     private var isUpdating = false
 
     // Повторне відкриття з Finder/Launchpad: у застосунку рядка меню немає вікна, тож показуємо налаштування
@@ -1393,6 +1529,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Порядок джерел: SvitloPulse → GPV-UA → (Вінниччина: дзеркало → сайт VOE за Cloudflare).
     // Без відомої черги у Вінниці спершу питаємо VOE за адресою — він її визначає.
     @objc func refresh() {
+        refreshOthers()
         guard Store.isConfigured else { return }
         let region = Store.region
         if ProcessInfo.processInfo.environment["SVITLOBAR_FORCE_MIRROR"] == "1" {
@@ -1746,7 +1883,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let queueText = (schedule?.queue ?? Store.queue).map { "черга \($0)" }
         if Store.isConfigured {
             let place = Store.addressLabel ?? Store.region.operatorName
-            menu.addItem(disabled([place, queueText].compactMap { $0 }.joined(separator: " • ")))
+            let name = Store.places.count > 1 ? Store.activePlace?.name : nil
+            menu.addItem(disabled([name, place, queueText].compactMap { $0 }.joined(separator: " • ")))
         }
         if let schedule {
             let formatter = DateFormatter()
@@ -1762,6 +1900,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 menu.addItem(disabled("Джерело: сайт VOE · оновлено о \(formatter.string(from: schedule.fetched))"))
             }
         }
+
+        addOtherPlaces(to: menu)
 
         menu.addItem(.separator())
         if let update = availableUpdate {
@@ -1787,6 +1927,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(makeItem("Вийти", #selector(quit), "q"))
+    }
+
+    // Інші місця: рядок зі станом, графік — у підменю
+    private func addOtherPlaces(to menu: NSMenu) {
+        let others = Store.otherPlaces
+        guard !others.isEmpty else { return }
+        menu.addItem(.separator())
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "HH:mm"
+        let today = todayString()
+        for place in others {
+            let placeSchedule = otherSchedules[place.id]
+            var status = place.queue == nil ? "не налаштовано" : "оновлюю…"
+            if let placeSchedule {
+                if let state = computeState(placeSchedule) {
+                    let base = state.offNow ? "🔌 світла немає" : "⚡️ світло є"
+                    status = state.transition.map { "\(base) до \(timeFormatter.string(from: $0))" } ?? base
+                } else {
+                    status = "графіка на сьогодні немає"
+                }
+            }
+            let item = NSMenuItem(title: "\(place.name): \(status)", action: nil, keyEquivalent: "")
+            let submenu = NSMenu()
+            let details = [place.displayAddress ?? place.region.operatorName, place.queue.map { "черга \($0)" }]
+            submenu.addItem(disabled(details.compactMap { $0 }.joined(separator: " • ")))
+            for day in placeSchedule?.days ?? [] {
+                submenu.addItem(.separator())
+                submenu.addItem(viewItem(dayView(day, isToday: day.date == today)))
+            }
+            submenu.addItem(.separator())
+            let show = makeItem("Показувати в рядку меню", #selector(makeActive(_:)), "")
+            show.representedObject = place.id
+            submenu.addItem(show)
+            item.submenu = submenu
+            menu.addItem(item)
+        }
     }
 
     private func disabled(_ title: String) -> NSMenuItem {
@@ -1907,20 +2083,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             controller.onSave = { [weak self] submission in
                 self?.save(submission)
             }
+            controller.onDelete = { [weak self] id in
+                self?.deletePlace(id)
+            }
             controller.onBlinkChange = { [weak self] in
                 self?.updateTitle()
             }
             settingsController = controller
         }
-        var city = "", street = "", house = ""
-        if Store.region.id == "vinnytsia", let config = Store.load() {
-            city = config.cityLabel.components(separatedBy: " (").first?.replacingOccurrences(of: "м.", with: "")
-                .trimmingCharacters(in: .whitespaces) ?? ""
-            street = config.streetLabel
-            house = config.houseLabel
-        }
-        settingsController?.prefill(region: Store.region, queue: Store.queue, manual: Store.manualQueue || !Store.region.hasAddressLookup,
-                                    city: city, street: street, house: house)
+        let places = Store.places
+        settingsController?.show(places: places, selecting: places.isEmpty ? nil : Store.activePlace?.id)
         settingsController?.window?.center()
         settingsController?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -1930,17 +2102,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func save(_ submission: SettingsWindowController.Submission) {
+        var place = Store.places.first { $0.id == submission.placeId }
+            ?? Place(id: UUID().uuidString, name: submission.name, regionId: submission.region.id, queue: nil,
+                     manualQueue: false, addressLabel: nil, voeAddress: nil)
+        place.name = submission.name
+        place.regionId = submission.region.id
+
         if let queue = submission.queue {
-            Store.region = submission.region
-            Store.queue = queue
-            Store.manualQueue = true
-            Store.addressLabel = nil
-            finishSave(status: "Збережено: \(submission.region.operatorName), черга \(queue)")
+            place.queue = queue
+            place.manualQueue = true
+            place.addressLabel = nil
+            place.voeAddress = nil
+            commit(place, status: "Збережено: \(place.name) — \(submission.region.operatorName), черга \(queue)")
             return
         }
         switch submission.region.lookup {
         case .voe:
-            saveVOEAddress(city: submission.city, street: submission.street, house: submission.house)
+            saveVOEAddress(place, city: submission.city, street: submission.street, house: submission.house)
         case .yasno(let regionId, let dsoId, let hasCities):
             settingsController?.setBusy(true)
             settingsController?.setStatus("Шукаю адресу в довіднику YASNO…", isError: false)
@@ -1949,12 +2127,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     let found = try await YasnoClient.resolve(regionId: regionId, dsoId: dsoId, hasCities: hasCities,
                                                               city: submission.city, street: submission.street,
                                                               house: submission.house)
-                    Store.region = submission.region
-                    Store.queue = found.queue
-                    Store.manualQueue = false
-                    Store.addressLabel = found.label
+                    place.queue = found.queue
+                    place.manualQueue = false
+                    place.addressLabel = found.label
+                    place.voeAddress = nil
                     self?.settingsController?.setBusy(false)
-                    self?.finishSave(status: "Готово. Черга \(found.queue) — \(found.label)")
+                    self?.commit(place, status: "Готово: \(place.name) — черга \(found.queue), \(found.label)")
                 } catch {
                     self?.settingsController?.setBusy(false)
                     self?.settingsController?.setStatus(error.localizedDescription, isError: true)
@@ -1965,9 +2143,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func finishSave(status: String) {
+    // Зберігає місце; перше місце (або активне) одразу керує рядком меню
+    private func commit(_ place: Place, status: String) {
+        let isFirst = Store.places.isEmpty
+        Store.upsert(place)
+        if isFirst { Store.activePlaceId = place.id }
+        settingsController?.show(places: Store.places, selecting: place.id)
         settingsController?.setStatus(status, isError: false)
-        schedule = nil
+        if place.id == Store.activePlace?.id {
+            schedule = nil
+            lastError = nil
+            voeError = nil
+            updateTitle()
+            rebuildMenu()
+            refresh()
+        } else {
+            otherSchedules[place.id] = nil
+            refreshOthers()
+        }
+    }
+
+    private func deletePlace(_ id: String) {
+        let wasActive = Store.activePlace?.id == id
+        Store.remove(id: id)
+        otherSchedules[id] = nil
+        if wasActive, let next = Store.activePlace {
+            schedule = otherSchedules.removeValue(forKey: next.id)
+            lastError = nil
+            voeError = nil
+            refresh()
+        }
+        updateTitle()
+        rebuildMenu()
+        settingsController?.show(places: Store.places, selecting: Store.activePlace?.id)
+        settingsController?.setStatus("Місце видалено", isError: false)
+    }
+
+    @objc private func makeActive(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, id != Store.activePlace?.id,
+              let oldId = Store.activePlace?.id else { return }
+        if let schedule { otherSchedules[oldId] = schedule }
+        Store.activePlaceId = id
+        schedule = otherSchedules.removeValue(forKey: id)
         lastError = nil
         voeError = nil
         updateTitle()
@@ -1975,7 +2192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refresh()
     }
 
-    private func saveVOEAddress(city: String, street: String, house: String) {
+    private func saveVOEAddress(_ place: Place, city: String, street: String, house: String) {
         settingsController?.setBusy(true)
         settingsController?.setStatus("Шукаю адресу в довіднику VOE…", isError: false)
         client.resolveAddress(city: city, street: street, house: house) { [weak self] result in
@@ -1986,26 +2203,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.settingsController?.setBusy(false)
                     self.settingsController?.setStatus(error.localizedDescription, isError: true)
                 case .success(let config):
-                    Store.save(config)
-                    Store.region = Region.find("vinnytsia")
-                    Store.manualQueue = false
-                    Store.addressLabel = config.shortLabel
                     self.settingsController?.setStatus("Адресу знайдено: \(config.shortLabel). Визначаю чергу…", isError: false)
                     self.client.fetchSchedule(config: config) { scheduleResult in
                         DispatchQueue.main.async {
                             self.settingsController?.setBusy(false)
                             switch scheduleResult {
                             case .success(let schedule):
-                                Store.queue = schedule.queue
-                                self.finishSave(status: "Готово. Черга \(schedule.queue) — \(config.shortLabel)")
+                                var updated = place
+                                updated.regionId = "vinnytsia"
+                                updated.voeAddress = config
+                                updated.queue = schedule.queue
+                                updated.manualQueue = false
+                                updated.addressLabel = config.shortLabel
+                                self.commit(updated, status: "Готово: \(updated.name) — черга \(schedule.queue), \(config.shortLabel)")
                             case .failure(let error):
-                                self.lastError = error.localizedDescription
                                 self.settingsController?.setStatus(error.localizedDescription, isError: true)
-                                self.rebuildMenu()
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Графіки решти місць (не того, що в рядку меню). VOE тут не чіпаємо — лише агрегатори й дзеркало
+    private func refreshOthers() {
+        for place in Store.otherPlaces {
+            guard let queue = place.queue else { continue }
+            Task { @MainActor [weak self] in
+                do {
+                    let result = try await ScheduleService.schedule(for: place.region, queue: queue)
+                    self?.otherSchedules[place.id] = result
+                    debugLog("refresh ok (\(result.sourceName ?? "?")): \(place.name) \(place.regionId) \(queue)")
+                } catch {
+                    debugLog("refresh failed (\(place.name)): \(error.localizedDescription)")
+                    if place.regionId == "vinnytsia",
+                       let mirror = try? await withCheckedThrowingContinuation({ continuation in
+                           MirrorClient.fetch(queue: queue) { continuation.resume(with: $0) }
+                       }) {
+                        self?.otherSchedules[place.id] = mirror
+                    }
+                }
+                self?.rebuildMenu()
             }
         }
     }
