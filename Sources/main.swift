@@ -909,6 +909,7 @@ final class SettingsWindowController: NSWindowController {
     private let placePopup = NSPopUpButton()
     private let nameField = NSTextField()
     private let deleteButton = NSButton(title: "Видалити", target: nil, action: nil)
+    private let addButton = NSButton(title: "＋ Додати", target: nil, action: nil)
     private var places: [Place] = []
     private let regionPopup = NSPopUpButton()
     private let queuePopup = NSPopUpButton()
@@ -932,7 +933,7 @@ final class SettingsWindowController: NSWindowController {
     var onBlinkChange: (() -> Void)?
 
     convenience init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 500),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 470),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "SvitloBar — налаштування"
         self.init(window: window)
@@ -957,7 +958,10 @@ final class SettingsWindowController: NSWindowController {
         deleteButton.target = self
         deleteButton.action = #selector(deleteTapped)
         nameField.placeholderString = "Дім, Офіс…"
-        let placeControls = NSStackView(views: [placePopup, deleteButton])
+        addButton.bezelStyle = .rounded
+        addButton.target = self
+        addButton.action = #selector(addTapped)
+        let placeControls = NSStackView(views: [placePopup, addButton, deleteButton])
         placeControls.orientation = .horizontal
 
         regionPopup.addItems(withTitles: Region.all.map(\.name))
@@ -1062,6 +1066,13 @@ final class SettingsWindowController: NSWindowController {
         }
         prefill(region: place.region, queue: place.queue, manual: place.manualQueue || !place.region.hasAddressLookup,
                 city: city, street: street, house: house)
+    }
+
+    @objc private func addTapped() {
+        placePopup.selectItem(withTitle: Self.newPlaceTitle)
+        placeChanged()
+        window?.makeFirstResponder(nameField)
+        setStatus("Нове місце: вкажіть назву, область і чергу або адресу, потім «Зберегти».", isError: false)
     }
 
     @objc private func deleteTapped() {
