@@ -325,6 +325,7 @@ final class VOEClient: NSObject, WKNavigationDelegate {
             webView.evaluateJavaScript("document.querySelector('input[name=csrf]')?.value || ''") { [weak self] result, _ in
                 guard let self else { return }
                 if let token = result as? String, !token.isEmpty {
+                    self.setWindowHidden(true)  // перевірку пройдено вручну — ховаємо вікно сайту
                     completion(.success(()))
                 } else {
                     self.load(completion)
@@ -375,6 +376,15 @@ final class VOEClient: NSObject, WKNavigationDelegate {
                 self.pollTimer?.invalidate()
                 self.setWindowHidden(true)
                 self.finishWaiters(.success(()))
+            } else if self.pollAttempts == 8, !(self.hostWindow.isVisible && self.hostWindow.alphaValue == 1) {
+                // Сторінка Cloudflare у прихованому вікні сама не проходить — не чекаємо пів хвилини
+                self.webView.evaluateJavaScript("document.title") { title, _ in
+                    guard (title as? String)?.hasPrefix("Just a moment") == true else { return }
+                    self.pollTimer?.invalidate()
+                    debugLog("challenge detected early")
+                    self.finishWaiters(.failure(AppError(
+                        "Сайт просить перевірку безпеки — оберіть у меню «Пройти перевірку Cloudflare…» і підтвердіть її вручну")))
+                }
             } else if self.pollAttempts > 30,
                       !(self.hostWindow.isVisible && self.hostWindow.alphaValue == 1) {
                 // у видимому вікні користувач проходить перевірку сам — не обриваємо
@@ -397,6 +407,37 @@ final class VOEClient: NSObject, WKNavigationDelegate {
         let waiters = csrfWaiters
         csrfWaiters = []
         waiters.forEach { $0(result) }
+    }
+
+    // MARK: Підказки адреси для вікна налаштувань (type: city | street | house)
+
+    func suggest(type: String, query: String, ref: String?,
+                 completion: @escaping (Result<[(id: String, label: String)], Error>) -> Void) {
+        ensureReady { [weak self] result in
+            guard let self else { return }
+            if case .failure(let error) = result {
+                debugLog("suggest VOE not ready: \(error.localizedDescription)")
+                return completion(.failure(error))
+            }
+            let js = """
+            let u = '/api/autocomplete.php?type=' + type + '&q=' + encodeURIComponent(q);
+            if (ref) u += '&ref=' + encodeURIComponent(ref);
+            const r = await (await fetch(u)).json();
+            return JSON.stringify(r.items || []);
+            """
+            self.webView.callAsyncJavaScript(js, arguments: ["type": type, "q": query, "ref": ref ?? ""],
+                                             in: nil, in: .page) { result in
+                guard case .success(let value) = result, let text = value as? String,
+                      let data = text.data(using: .utf8),
+                      let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                    return completion(.success([]))
+                }
+                completion(.success(items.compactMap { item in
+                    guard let id = item["id"].map({ "\($0)" }), let label = item["label"] as? String else { return nil }
+                    return (id, label)
+                }))
+            }
+        }
     }
 
     // MARK: Пошук адреси (autocomplete: місто → вулиця → будинок)
@@ -747,6 +788,27 @@ enum YasnoClient {
             ?? list.first
     }
 
+    // Підказки: kind = cities | streets | houses
+    static func suggest(kind: String, regionId: Int, dsoId: Int, cityId: String?, streetId: String?,
+                        query: String) async -> [(id: String, label: String)] {
+        var params = ["regionId": "\(regionId)", "dsoId": "\(dsoId)", "query": query]
+        if let cityId { params["cityId"] = cityId }
+        if let streetId { params["streetId"] = streetId }
+        let list = (try? await items("/\(kind)", params)) ?? []
+        return list.map { ("\($0.id)", $0.value) }
+    }
+
+    static func queue(regionId: Int, dsoId: Int, cityId: String?, streetId: String, houseId: String) async throws -> String {
+        var params = ["regionId": "\(regionId)", "dsoId": "\(dsoId)", "streetId": streetId, "houseId": houseId]
+        if let cityId { params["cityId"] = cityId }
+        guard let url = Net.url(base, "/group", params),
+              let obj = try await Net.json(url) as? [String: Any],
+              let group = obj["group"] as? Int else {
+            throw AppError("YASNO не повернув чергу для цієї адреси")
+        }
+        return "\(group).\((obj["subgroup"] as? Int) ?? 1)"
+    }
+
     static func resolve(regionId: Int, dsoId: Int, hasCities: Bool,
                         city: String, street: String, house: String) async throws -> (queue: String, label: String) {
         var common = ["regionId": "\(regionId)", "dsoId": "\(dsoId)"]
@@ -900,6 +962,9 @@ final class SettingsWindowController: NSWindowController {
         let city: String
         let street: String
         let house: String
+        let cityRef: String?
+        let streetRef: String?
+        let houseRef: String?
     }
 
     private static let autoQueueTitle = "Визначити за адресою"
@@ -913,9 +978,19 @@ final class SettingsWindowController: NSWindowController {
     private var places: [Place] = []
     private let regionPopup = NSPopUpButton()
     private let queuePopup = NSPopUpButton()
-    private let cityField = NSTextField()
-    private let streetField = NSTextField()
-    private let houseField = NSTextField()
+    private let cityField = NSComboBox()
+    private let streetField = NSComboBox()
+    private let houseField = NSComboBox()
+    // id обраних підказок (YASNO — число, VOE — рядок); скидаються, коли текст змінюють руками
+    private var cityRef: String?
+    private var streetRef: String?
+    private var houseRef: String?
+    private var suggestions: [ObjectIdentifier: [(id: String, label: String)]] = [:]
+    private var suggestTask: Task<Void, Never>?
+    var voeSuggest: ((String, String, String?, @escaping (Result<[(id: String, label: String)], Error>) -> Void) -> Void)?
+    var onSolveChallenge: (() -> Void)?
+    private let challengeButton = NSButton(title: "Пройти перевірку Cloudflare…", target: nil, action: nil)
+    private var challengeShown = false
     private var cityRow: NSStackView!
     private var addressRows: [NSStackView] = []
     private let hint = NSTextField(wrappingLabelWithString: "")
@@ -970,6 +1045,11 @@ final class SettingsWindowController: NSWindowController {
         queuePopup.target = self
         queuePopup.action = #selector(queueChanged)
 
+        for field in [cityField, streetField, houseField] {
+            field.completes = false
+            field.numberOfVisibleItems = 10
+            field.delegate = self
+        }
         cityField.placeholderString = "Дніпро"
         streetField.placeholderString = "Соборна"
         houseField.placeholderString = "1"
@@ -979,6 +1059,10 @@ final class SettingsWindowController: NSWindowController {
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         hint.preferredMaxLayoutWidth = 410
+        challengeButton.bezelStyle = .rounded
+        challengeButton.target = self
+        challengeButton.action = #selector(challengeTapped)
+        challengeButton.isHidden = true
         lookupButton.bezelStyle = .inline
         lookupButton.target = self
         lookupButton.action = #selector(openLookupPage)
@@ -1006,7 +1090,7 @@ final class SettingsWindowController: NSWindowController {
         separator.widthAnchor.constraint(equalToConstant: 410).isActive = true
         let stack = NSStackView(views: [row("Місце", placeControls), row("Назва", nameField), separator,
                                         row("Область", regionPopup), row("Черга", queuePopup)]
-                                + addressRows + [hint, lookupButton, buttonRow, statusLabel, blinkCheckbox, menuBarHint])
+                                + addressRows + [hint, lookupButton, challengeButton, buttonRow, statusLabel, blinkCheckbox, menuBarHint])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -1068,6 +1152,12 @@ final class SettingsWindowController: NSWindowController {
                 city: city, street: street, house: house)
     }
 
+    @objc private func challengeTapped() {
+        challengeButton.isHidden = true
+        setStatus("Підтвердіть перевірку у вікні сайту ВОЕ, потім знову почніть вводити адресу.", isError: false)
+        onSolveChallenge?()
+    }
+
     @objc private func addTapped() {
         placePopup.selectItem(withTitle: Self.newPlaceTitle)
         placeChanged()
@@ -1085,6 +1175,9 @@ final class SettingsWindowController: NSWindowController {
         cityField.stringValue = city
         streetField.stringValue = street
         houseField.stringValue = house
+        cityRef = nil
+        streetRef = nil
+        houseRef = nil
         pendingQueue = manual ? queue : nil
         regionChanged()
     }
@@ -1177,7 +1270,109 @@ final class SettingsWindowController: NSWindowController {
         }
         let name = nameField.stringValue.trimmingCharacters(in: .whitespaces)
         onSave?(Submission(placeId: selectedPlace?.id, name: name.isEmpty ? "Місце" : name, region: region,
-                           queue: selectedQueue, city: city, street: street, house: house))
+                           queue: selectedQueue, city: city, street: street, house: house,
+                           cityRef: cityRef, streetRef: streetRef, houseRef: houseRef))
+    }
+}
+
+extension SettingsWindowController: NSComboBoxDelegate {
+    // Ручна зміна тексту: скидаємо обране й підтягуємо підказки
+    func controlTextDidChange(_ notification: Notification) {
+        guard let field = notification.object as? NSComboBox else { return }
+        debugLog("suggest typed: \(field.stringValue)")
+        clearRefs(from: field)
+        let query = field.stringValue.trimmingCharacters(in: .whitespaces)
+        suggestTask?.cancel()
+        guard query.count >= (field === houseField ? 1 : 2) else { return }
+        suggestTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard let self, !Task.isCancelled else { return }
+            let items = await self.fetchSuggestions(for: field, query: query)
+            debugLog("suggest got \(items.count) for \(query)")
+            guard !Task.isCancelled, field.stringValue.trimmingCharacters(in: .whitespaces) == query else { return }
+            self.suggestions[ObjectIdentifier(field)] = items
+            field.removeAllItems()
+            field.addItems(withObjectValues: items.map(\.label))
+            if !items.isEmpty, let cell = field.cell as? NSComboBoxCell {
+                cell.perform(Selector(("popUp:")), with: nil)
+            }
+        }
+    }
+
+    func comboBoxSelectionDidChange(_ notification: Notification) {
+        guard let field = notification.object as? NSComboBox else { return }
+        let index = field.indexOfSelectedItem
+        guard let items = suggestions[ObjectIdentifier(field)], index >= 0, index < items.count else { return }
+        let picked = items[index]
+        clearRefs(from: field)
+        if field === cityField { cityRef = picked.id }
+        if field === streetField { streetRef = picked.id }
+        if field === houseField { houseRef = picked.id }
+        let next: NSComboBox? = field === cityField ? streetField : (field === streetField ? houseField : nil)
+        if let next {
+            DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(next) }
+        }
+    }
+
+    private func clearRefs(from field: NSComboBox) {
+        if field === cityField { cityRef = nil; streetRef = nil; houseRef = nil }
+        if field === streetField { streetRef = nil; houseRef = nil }
+        if field === houseField { houseRef = nil }
+    }
+
+    private func fetchSuggestions(for field: NSComboBox, query: String) async -> [(id: String, label: String)] {
+        let region = Region.all[max(0, regionPopup.indexOfSelectedItem)]
+        let kind = field === cityField ? "city" : (field === streetField ? "street" : "house")
+        switch region.lookup {
+        case .yasno(let regionId, let dsoId, let hasCities):
+            if kind == "city" {
+                return await YasnoClient.suggest(kind: "cities", regionId: regionId, dsoId: dsoId, cityId: nil,
+                                                 streetId: nil, query: query)
+            }
+            var cityId = cityRef
+            if hasCities && cityId == nil {
+                let city = cityField.stringValue.trimmingCharacters(in: .whitespaces)
+                guard !city.isEmpty else { return [] }
+                cityId = await YasnoClient.suggest(kind: "cities", regionId: regionId, dsoId: dsoId, cityId: nil,
+                                                   streetId: nil, query: city).first?.id
+            }
+            if kind == "street" {
+                return await YasnoClient.suggest(kind: "streets", regionId: regionId, dsoId: dsoId, cityId: cityId,
+                                                 streetId: nil, query: query)
+            }
+            guard let streetId = streetRef else { return [] }
+            return await YasnoClient.suggest(kind: "houses", regionId: regionId, dsoId: dsoId, cityId: cityId,
+                                             streetId: streetId, query: query)
+        case .voe:
+            guard let voeSuggest else { return [] }
+            let ref: String? = kind == "city" ? nil : (kind == "street" ? cityRef : streetRef)
+            if kind != "city" && ref == nil {
+                setStatus(kind == "street" ? "Спершу оберіть місто зі списку." : "Спершу оберіть вулицю зі списку.", isError: true)
+                return []
+            }
+            setStatus("Шукаю на сайті ВОЕ…", isError: false)
+            let result = await withCheckedContinuation { continuation in
+                voeSuggest(kind, query, ref) { continuation.resume(returning: $0) }
+            }
+            switch result {
+            case .success(let items):
+                setStatus(items.isEmpty ? "Нічого не знайдено" : "", isError: items.isEmpty)
+                return items
+            case .failure:
+                challengeButton.isHidden = false
+                if !challengeShown {
+                    // Людина саме вводить адресу — одразу показуємо вікно перевірки
+                    challengeShown = true
+                    onSolveChallenge?()
+                    setStatus("Сайт ВОЕ просить перевірку: поставте галочку у вікні, що відкрилось, потім введіть місто ще раз.", isError: true)
+                } else {
+                    setStatus("Сайт ВОЕ досі просить перевірку — натисніть кнопку вище або оберіть чергу вручну.", isError: true)
+                }
+                return []
+            }
+        case .none:
+            return []
+        }
     }
 }
 
@@ -2097,6 +2292,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             controller.onDelete = { [weak self] id in
                 self?.deletePlace(id)
             }
+            controller.onSolveChallenge = { [weak self] in
+                self?.client.presentChallengeWindow()
+            }
+            controller.voeSuggest = { [weak self] type, query, ref, completion in
+                guard let self else { return completion(.success([])) }
+                self.client.suggest(type: type, query: query, ref: ref) { items in
+                    DispatchQueue.main.async { completion(items) }
+                }
+            }
             controller.onBlinkChange = { [weak self] in
                 self?.updateTitle()
             }
@@ -2129,15 +2333,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         switch submission.region.lookup {
         case .voe:
-            saveVOEAddress(place, city: submission.city, street: submission.street, house: submission.house)
+            debugLog("save VOE refs: city=\(submission.cityRef ?? "-") street=\(submission.streetRef ?? "-") house=\(submission.houseRef ?? "-")")
+            if let cityRef = submission.cityRef, let streetRef = submission.streetRef {
+                // Місто й вулицю обрано з підказок — повторний пошук за текстом не потрібен
+                let build = { (houseId: String, houseLabel: String) in
+                    AddressConfig(cityId: cityRef, cityLabel: submission.city, streetId: streetRef,
+                                  streetLabel: submission.street, houseId: houseId, houseLabel: houseLabel)
+                }
+                if let houseRef = submission.houseRef {
+                    saveVOEAddress(place, config: build(houseRef, submission.house))
+                    return
+                }
+                // Будинок вписано руками — шукаємо номер на обраній вулиці
+                settingsController?.setBusy(true)
+                settingsController?.setStatus("Шукаю будинок \(submission.house)…", isError: false)
+                client.suggest(type: "house", query: submission.house, ref: streetRef) { [weak self] result in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        self.settingsController?.setBusy(false)
+                        let items = (try? result.get()) ?? []
+                        let wanted = submission.house.lowercased()
+                        guard let house = items.first(where: { $0.label.lowercased() == wanted }) ?? items.first else {
+                            self.settingsController?.setStatus("Будинок не знайдено — оберіть його зі списку.", isError: true)
+                            return
+                        }
+                        self.saveVOEAddress(place, config: build(house.id, house.label))
+                    }
+                }
+            } else {
+                let city = (submission.city.components(separatedBy: " (").first ?? submission.city)
+                    .replacingOccurrences(of: "м.", with: "").trimmingCharacters(in: .whitespaces)
+                saveVOEAddress(place, city: city, street: submission.street, house: submission.house)
+            }
         case .yasno(let regionId, let dsoId, let hasCities):
             settingsController?.setBusy(true)
             settingsController?.setStatus("Шукаю адресу в довіднику YASNO…", isError: false)
             Task { @MainActor [weak self] in
                 do {
-                    let found = try await YasnoClient.resolve(regionId: regionId, dsoId: dsoId, hasCities: hasCities,
+                    let found: (queue: String, label: String)
+                    if let streetRef = submission.streetRef, let houseRef = submission.houseRef {
+                        // Адресу обрано з підказок — питаємо чергу напряму за id
+                        let queue = try await YasnoClient.queue(regionId: regionId, dsoId: dsoId, cityId: submission.cityRef,
+                                                                streetId: streetRef, houseId: houseRef)
+                        let parts = [hasCities ? submission.city : nil, submission.street, submission.house]
+                        found = (queue, parts.compactMap { $0 }.joined(separator: ", "))
+                    } else {
+                        found = try await YasnoClient.resolve(regionId: regionId, dsoId: dsoId, hasCities: hasCities,
                                                               city: submission.city, street: submission.street,
                                                               house: submission.house)
+                    }
                     place.queue = found.queue
                     place.manualQueue = false
                     place.addressLabel = found.label
@@ -2214,24 +2458,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.settingsController?.setBusy(false)
                     self.settingsController?.setStatus(error.localizedDescription, isError: true)
                 case .success(let config):
-                    self.settingsController?.setStatus("Адресу знайдено: \(config.shortLabel). Визначаю чергу…", isError: false)
-                    self.client.fetchSchedule(config: config) { scheduleResult in
-                        DispatchQueue.main.async {
-                            self.settingsController?.setBusy(false)
-                            switch scheduleResult {
-                            case .success(let schedule):
-                                var updated = place
-                                updated.regionId = "vinnytsia"
-                                updated.voeAddress = config
-                                updated.queue = schedule.queue
-                                updated.manualQueue = false
-                                updated.addressLabel = config.shortLabel
-                                self.commit(updated, status: "Готово: \(updated.name) — черга \(schedule.queue), \(config.shortLabel)")
-                            case .failure(let error):
-                                self.settingsController?.setStatus(error.localizedDescription, isError: true)
-                            }
-                        }
-                    }
+                    self.saveVOEAddress(place, config: config)
+                }
+            }
+        }
+    }
+
+    // Черга для вже знайденої адреси VOE (ВОЕ віддає її разом із графіком)
+    private func saveVOEAddress(_ place: Place, config: AddressConfig) {
+        settingsController?.setBusy(true)
+        settingsController?.setStatus("Адреса: \(config.shortLabel). Визначаю чергу…", isError: false)
+        client.fetchSchedule(config: config) { [weak self] scheduleResult in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.settingsController?.setBusy(false)
+                switch scheduleResult {
+                case .success(let schedule):
+                    var updated = place
+                    updated.regionId = "vinnytsia"
+                    updated.voeAddress = config
+                    updated.queue = schedule.queue
+                    updated.manualQueue = false
+                    updated.addressLabel = config.shortLabel
+                    self.commit(updated, status: "Готово: \(updated.name) — черга \(schedule.queue), \(config.shortLabel)")
+                case .failure(let error):
+                    self.settingsController?.setStatus(error.localizedDescription, isError: true)
                 }
             }
         }
