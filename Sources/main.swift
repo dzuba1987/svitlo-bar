@@ -170,6 +170,13 @@ enum Store {
         set { defaults.set(newValue, forKey: "blinkEnabled") }
     }
 
+    // Скільки годин графіка малювати в рядку меню: 24 — уся доба, 12/6/3 — від поточної години, 0 — не малювати
+    static let sparkHourOptions = [24, 12, 6, 3, 0]
+    static var sparkHours: Int {
+        get { defaults.object(forKey: "sparkHours") as? Int ?? 24 }
+        set { defaults.set(newValue, forKey: "sparkHours") }
+    }
+
     static var places: [Place] {
         get {
             if let data = defaults.data(forKey: placesKey),
@@ -1028,13 +1035,14 @@ final class SettingsWindowController: NSWindowController {
     private let spinner = NSProgressIndicator()
     private let blinkCheckbox = NSButton(checkboxWithTitle: "Блимати в рядку меню за 15 хв до зміни стану",
                                          target: nil, action: nil)
+    private let sparkPopup = NSPopUpButton()
     private var pendingQueue: String?
     var onSave: ((Submission) -> Void)?
     var onDelete: ((String) -> Void)?
     var onBlinkChange: (() -> Void)?
 
     convenience init() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 470),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 505),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "SvitloBar — налаштування"
         self.init(window: window)
@@ -1110,13 +1118,24 @@ final class SettingsWindowController: NSWindowController {
         blinkCheckbox.target = self
         blinkCheckbox.action = #selector(blinkToggled)
         blinkCheckbox.state = Store.blinkEnabled ? .on : .off
+        sparkPopup.addItems(withTitles: Store.sparkHourOptions.map { hours in
+            switch hours {
+            case 0: return "Не показувати"
+            case 24: return "Уся доба (24 год)"
+            default: return "Наступні \(hours) год"
+            }
+        })
+        sparkPopup.selectItem(at: Store.sparkHourOptions.firstIndex(of: Store.sparkHours) ?? 0)
+        sparkPopup.target = self
+        sparkPopup.action = #selector(sparkChanged)
 
         let separator = NSBox()
         separator.boxType = .separator
         separator.widthAnchor.constraint(equalToConstant: 410).isActive = true
         let stack = NSStackView(views: [row("Місце", placeControls), row("Назва", nameField), separator,
                                         row("Область", regionPopup), row("Черга", queuePopup)]
-                                + addressRows + [hint, lookupButton, challengeButton, buttonRow, statusLabel, blinkCheckbox, menuBarHint])
+                                + addressRows + [hint, lookupButton, challengeButton, buttonRow, statusLabel, blinkCheckbox,
+                                           row("Мініграфік", sparkPopup), menuBarHint])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -1275,6 +1294,11 @@ final class SettingsWindowController: NSWindowController {
     // Застосовується одразу, без кнопки «Зберегти»
     @objc private func blinkToggled() {
         Store.blinkEnabled = blinkCheckbox.state == .on
+        onBlinkChange?()
+    }
+
+    @objc private func sparkChanged() {
+        Store.sparkHours = Store.sparkHourOptions[max(0, sparkPopup.indexOfSelectedItem)]
         onBlinkChange?()
     }
 
@@ -1945,24 +1969,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // Міні-смуга дня для рядка меню: 24 стовпчики, висота й колір за станом, рамка — поточна година
-    private func sparkImage(slots: [Int]) -> NSImage {
+    // Слоти для мініграфіка: уся сьогоднішня доба або N годин від поточної (з переходом на завтра)
+    private func sparkWindow(_ schedule: Schedule) -> (slots: [Int], startHour: Int)? {
+        let hours = Store.sparkHours
+        guard hours > 0, let todayIndex = schedule.days.firstIndex(where: { $0.date == todayString() }) else { return nil }
+        let today = Array(schedule.days[todayIndex].slots.prefix(slotsPerDay))
+        if hours >= 24 { return (today, 0) }
+        let tomorrow = schedule.days.indices.contains(todayIndex + 1)
+            ? Array(schedule.days[todayIndex + 1].slots.prefix(slotsPerDay)) : []
+        let all = today + tomorrow
+        let start = nowMinutes() / 60
+        let from = start * 2
+        let to = min(all.count, (start + hours) * 2)
+        guard from < to else { return nil }
+        return (Array(all[from..<to]), start)
+    }
+
+    private func sparkImage(_ window: (slots: [Int], startHour: Int)) -> NSImage {
+        let (slots, startHour) = window
         let barWidth: CGFloat = 2, gap: CGFloat = 1, height: CGFloat = 16
-        let width = CGFloat(24) * (barWidth + gap) - gap + 2
+        let hourCount = (slots.count + 1) / 2
+        let width = CGFloat(hourCount) * (barWidth + gap) - gap + 2
         let now = nowMinutes()
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
             // стовпчик = година, кожна половина (1 pt) малюється своїм станом
-            for (slot, value) in slots.prefix(slotsPerDay).enumerated() {
+            for (slot, value) in slots.enumerated() {
                 let hour = slot / 2, half = slot % 2
                 let level = PowerLevel(level: value)
                 let barHeight: CGFloat = level == .off ? 14 : (level == .maybe ? 10 : 5)
                 var color = level.color
-                if (slot + 1) * slotMinutes <= now { color = color.withAlphaComponent(0.4) }
+                if (startHour * 2 + slot + 1) * slotMinutes <= now { color = color.withAlphaComponent(0.4) }
                 color.setFill()
                 let rect = NSRect(x: 1 + CGFloat(hour) * (barWidth + gap) + CGFloat(half) * barWidth / 2,
                                   y: 1, width: barWidth / 2, height: barHeight)
                 NSBezierPath(rect: rect).fill()
             }
-            let current = now / 60
+            let current = now / 60 - startHour
             let frame = NSRect(x: CGFloat(current) * (barWidth + gap) + 0.5, y: 0.5,
                                width: barWidth + 1, height: height - 1)
             NSColor.labelColor.setStroke()
@@ -2008,11 +2050,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         composeExtras()
         button.imagePosition = .imageLeft
-        if let today = schedule?.days.first(where: { $0.date == todayString() }) {
-            button.image = sparkImage(slots: today.slots)
-        } else {
-            button.image = nil
-        }
+        button.image = schedule.flatMap(sparkWindow).map(sparkImage)
         guard let schedule else {
             setAnimating(false)
             setTitle(lastError == nil ? "⚡︎…" : "⚡︎ !")
