@@ -209,6 +209,21 @@ enum Store {
         return places.filter { $0.id != active }
     }
 
+    // Додаткові місця, що показуються в рядку меню поруч з головним (коротко: стан і час)
+    static var extraBarPlaceIds: [String] {
+        get {
+            let saved = defaults.stringArray(forKey: "extraBarPlaceIds") ?? []
+            let others = Set(otherPlaces.map(\.id))
+            return saved.filter { others.contains($0) }
+        }
+        set { defaults.set(newValue, forKey: "extraBarPlaceIds") }
+    }
+
+    static var extraBarPlaces: [Place] {
+        let ids = extraBarPlaceIds
+        return otherPlaces.filter { ids.contains($0.id) }
+    }
+
     static func upsert(_ place: Place) {
         var list = places
         if let index = list.firstIndex(where: { $0.id == place.id }) {
@@ -1960,8 +1975,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return image
     }
 
+    // Кілька місць у рядку меню: головне з назвою, решта — «· Офіс 🔌 14:00»
+    private var titlePrefix = ""
+    private var titleSuffix = ""
+
+    private func setTitle(_ text: String) {
+        let gap = !titlePrefix.isEmpty && !text.hasPrefix(" ") ? " " : ""
+        let title = titlePrefix + gap + text + titleSuffix
+        if statusItem.button?.title != title, !titleSuffix.isEmpty, animTimer == nil { debugLog("title: \(title)") }
+        statusItem.button?.title = title
+    }
+
+    private func composeExtras() {
+        let extras = Store.extraBarPlaces
+        guard !extras.isEmpty, let active = Store.activePlace else {
+            titlePrefix = ""
+            titleSuffix = ""
+            return
+        }
+        titlePrefix = " \(active.name)"
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "HH:mm"
+        titleSuffix = extras.map { place in
+            guard let placeSchedule = otherSchedules[place.id] else { return "  ·  \(place.name) …" }
+            guard let state = computeState(placeSchedule) else { return "  ·  \(place.name) ?" }
+            let icon = state.offNow ? "🔌" : "⚡️"
+            return "  ·  \(place.name) \(icon)" + (state.transition.map { " \(timeFormatter.string(from: $0))" } ?? "")
+        }.joined()
+    }
+
     private func updateTitle() {
         guard let button = statusItem.button else { return }
+        composeExtras()
         button.imagePosition = .imageLeft
         if let today = schedule?.days.first(where: { $0.date == todayString() }) {
             button.image = sparkImage(slots: today.slots)
@@ -1970,12 +2015,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         guard let schedule else {
             setAnimating(false)
-            button.title = lastError == nil ? "⚡︎…" : "⚡︎ !"
+            setTitle(lastError == nil ? "⚡︎…" : "⚡︎ !")
             return
         }
         guard let state = computeState(schedule) else {
             setAnimating(false)
-            button.title = "⚡︎ \(schedule.queue)"
+            setTitle("⚡︎ \(schedule.queue)")
             return
         }
         let warningMinutes = 15
@@ -1993,15 +2038,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 } else {
                     // без миготіння: статичний відлік
                     setAnimating(false)
-                    button.title = " \(animIcons.0) \(animText)"
+                    setTitle(" \(animIcons.0) \(animText)")
                 }
                 return
             }
             setAnimating(false)
-            button.title = state.offNow ? " 🔌 до \(timeString)" : " ⚡️ до \(timeString)"
+            setTitle(state.offNow ? " 🔌 до \(timeString)" : " ⚡️ до \(timeString)")
         } else {
             setAnimating(false)
-            button.title = state.offNow ? " 🔌" : " ⚡️"
+            setTitle(state.offNow ? " 🔌" : " ⚡️")
         }
     }
 
@@ -2023,7 +2068,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func blinkTick() {
         guard let button = statusItem.button else { return }
         animPhase.toggle()
-        button.title = " \(animIcons.0) \(animText)"
+        setTitle(" \(animIcons.0) \(animText)")
         button.appearsDisabled = animPhase
     }
 
@@ -2241,7 +2286,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 submenu.addItem(viewItem(dayView(day, isToday: day.date == today)))
             }
             submenu.addItem(.separator())
-            let show = makeItem("Показувати в рядку меню", #selector(makeActive(_:)), "")
+            let also = makeItem("Також показувати в рядку меню", #selector(toggleExtraBar(_:)), "")
+            also.representedObject = place.id
+            also.state = Store.extraBarPlaceIds.contains(place.id) ? .on : .off
+            submenu.addItem(also)
+            let show = makeItem("Зробити головним у рядку меню", #selector(makeActive(_:)), "")
             show.representedObject = place.id
             submenu.addItem(show)
             item.submenu = submenu
@@ -2516,6 +2565,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let id = sender.representedObject as? String, id != Store.activePlace?.id,
               let oldId = Store.activePlace?.id else { return }
         if let schedule { otherSchedules[oldId] = schedule }
+        // Головне й додаткове міняються місцями: колишнє головне лишається в рядку меню
+        var extras = Store.extraBarPlaceIds
+        if let index = extras.firstIndex(of: id) {
+            extras[index] = oldId
+            Store.extraBarPlaceIds = extras
+        }
         Store.activePlaceId = id
         schedule = otherSchedules.removeValue(forKey: id)
         lastError = nil
@@ -2567,6 +2622,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // Графіки решти місць (не того, що в рядку меню). VOE тут не чіпаємо — лише агрегатори й дзеркало
+    @objc private func toggleExtraBar(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        var extras = Store.extraBarPlaceIds
+        if let index = extras.firstIndex(of: id) {
+            extras.remove(at: index)
+        } else {
+            extras.append(id)
+        }
+        Store.extraBarPlaceIds = extras
+        updateTitle()
+        rebuildMenu()
+    }
+
     private func refreshOthers() {
         for place in Store.otherPlaces {
             guard let queue = place.queue else { continue }
@@ -2584,6 +2652,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         self?.otherSchedules[place.id] = mirror
                     }
                 }
+                self?.updateTitle()
                 self?.rebuildMenu()
             }
         }
