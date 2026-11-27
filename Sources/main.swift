@@ -411,9 +411,11 @@ final class VOEClient: NSObject, WKNavigationDelegate {
 
     // MARK: Підказки адреси для вікна налаштувань (type: city | street | house)
 
-    func suggest(type: String, query: String, ref: String?,
+    func suggest(type: String, query: String, ref: String?, retried: Bool = false,
                  completion: @escaping (Result<[(id: String, label: String)], Error>) -> Void) {
-        ensureReady { [weak self] result in
+        // Після простою сесія сайту застаріває: fetch отримує сторінку перевірки замість JSON.
+        // Раніше це мовчки ставало «Нічого не знайдено» — тепер один раз перезавантажуємо сайт.
+        ensureReady(forceReload: retried) { [weak self] result in
             guard let self else { return }
             if case .failure(let error) = result {
                 debugLog("suggest VOE not ready: \(error.localizedDescription)")
@@ -422,15 +424,24 @@ final class VOEClient: NSObject, WKNavigationDelegate {
             let js = """
             let u = '/api/autocomplete.php?type=' + type + '&q=' + encodeURIComponent(q);
             if (ref) u += '&ref=' + encodeURIComponent(ref);
-            const r = await (await fetch(u)).json();
+            const resp = await fetch(u);
+            const text = await resp.text();
+            let r;
+            try { r = JSON.parse(text); } catch (e) { throw new Error('HTTP ' + resp.status + ' не JSON'); }
             return JSON.stringify(r.items || []);
             """
             self.webView.callAsyncJavaScript(js, arguments: ["type": type, "q": query, "ref": ref ?? ""],
-                                             in: nil, in: .page) { result in
+                                             in: nil, in: .page) { [weak self] result in
                 guard case .success(let value) = result, let text = value as? String,
                       let data = text.data(using: .utf8),
                       let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-                    return completion(.success([]))
+                    if case .failure(let error) = result {
+                        debugLog("suggest \(type) '\(query)' failed: \(error.localizedDescription)")
+                    }
+                    guard let self, !retried else {
+                        return completion(.failure(AppError("Сайт ВОЕ не відповів на пошук")))
+                    }
+                    return self.suggest(type: type, query: query, ref: ref, retried: true, completion: completion)
                 }
                 completion(.success(items.compactMap { item in
                     guard let id = item["id"].map({ "\($0)" }), let label = item["label"] as? String else { return nil }
@@ -1486,6 +1497,7 @@ final class TimelineBarView: NSView {
     private let nowMinutes: Int?  // nil — день не сьогоднішній
     private let barTop: CGFloat = 4
     private let barHeight: CGFloat = 18
+    private var hoverX: CGFloat?  // позиція мишки над смугою — показуємо час під курсором
 
     init(slots: [Int], nowMinutes: Int?) {
         self.slots = slots
@@ -1496,6 +1508,48 @@ final class TimelineBarView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
     override var isFlipped: Bool { true }
+
+    // MARK: Наведення мишки
+    // .activeAlways — меню перехоплює події, без нього view в NSMenu не отримує mouseMoved.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero,
+                                       options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) { setHover(event) }
+    override func mouseMoved(with event: NSEvent) { setHover(event) }
+    override func mouseExited(with event: NSEvent) {
+        hoverX = nil
+        needsDisplay = true
+    }
+
+    private func setHover(_ event: NSEvent) {
+        let x = convert(event.locationInWindow, from: nil).x
+        hoverX = min(max(x, 0), bounds.width)
+        needsDisplay = true
+    }
+
+    /// Хвилина доби під координатою x з урахуванням щілин між годинами; округлено до 5 хв.
+    private func minutes(at x: CGFloat, width: CGFloat, hourWidth: CGFloat, gap: CGFloat) -> Int {
+        let hour = min(23, max(0, Int(x / (hourWidth + gap))))
+        let inHour = min(max((x - CGFloat(hour) * (hourWidth + gap)) / hourWidth, 0), 1)
+        let raw = hour * 60 + Int((inHour * 60).rounded())
+        return min(1439, (raw / 5) * 5)
+    }
+
+    private func hoverText(minute: Int) -> String {
+        let slot = min(slots.count - 1, minute / slotMinutes)
+        guard slot >= 0 else { return "" }
+        let level = PowerLevel(level: slots[slot])
+        let time = String(format: "%02d:%02d", minute / 60, minute % 60)
+        guard let range = ScheduleMath.intervals(Array(slots.prefix(slotsPerDay)))
+            .first(where: { minute >= $0.start && minute < $0.end }) else { return "\(time) · \(level.label)" }
+        let fmt = { (m: Int) in m >= 1440 ? "24:00" : String(format: "%02d:%02d", m / 60, m % 60) }
+        return "\(time) · \(level.label) \(fmt(range.start))–\(fmt(range.end))"
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         let width = bounds.width
@@ -1516,6 +1570,30 @@ final class TimelineBarView: NSView {
             NSColor.labelColor.setFill()
             NSBezierPath(roundedRect: NSRect(x: x - 1, y: 0, width: 2, height: barHeight + barTop * 2),
                          xRadius: 1, yRadius: 1).fill()
+        }
+        if let hx = hoverX, !slots.isEmpty {
+            // Під курсором: тонка лінія на смузі + плашка з часом замість рядка міток 0/6/12…
+            let minute = minutes(at: hx, width: width, hourWidth: hourWidth, gap: gap)
+            NSColor.labelColor.withAlphaComponent(0.55).setFill()
+            NSBezierPath(rect: NSRect(x: hx - 0.5, y: barTop - 2, width: 1, height: barHeight + 4)).fill()
+            let level = PowerLevel(level: slots[min(slots.count - 1, minute / slotMinutes)])
+            let text = NSAttributedString(string: hoverText(minute: minute), attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold),
+                .foregroundColor: NSColor.labelColor,
+            ])
+            let size = text.size()
+            let pad: CGFloat = 6
+            var x = hx - size.width / 2 - pad
+            x = min(max(x, 0), width - size.width - pad * 2)
+            let pill = NSRect(x: x, y: barTop + barHeight + 2, width: size.width + pad * 2, height: size.height + 2)
+            NSColor.windowBackgroundColor.withAlphaComponent(0.95).setFill()
+            let path = NSBezierPath(roundedRect: pill, xRadius: 4, yRadius: 4)
+            path.fill()
+            level.color.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            text.draw(at: NSPoint(x: pill.minX + pad, y: pill.minY + 1))
+            return
         }
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
